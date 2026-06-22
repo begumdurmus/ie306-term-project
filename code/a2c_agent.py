@@ -105,3 +105,15 @@ class A2CAgent:
     def load(self, path):
         self.net.load_state_dict(torch.load(path, map_location="cpu"))
         self.net.eval()
+
+    def act_deterministic(self, obs):
+        """Eval için deterministik aksiyon — en yüksek olasılıklı aksiyonu seç."""
+        mask = obs["action_mask"].astype(bool)
+        vec  = obs_to_vector(obs)
+        x    = torch.tensor(vec, dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            logits, _ = self.net(x)
+        logits = logits.squeeze(0)
+        inf_mask = torch.zeros(self.n_actions)
+        inf_mask[~mask] = -float("inf")
+        return int((logits + inf_mask).argmax().item())
