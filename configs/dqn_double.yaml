@@ -1,0 +1,15 @@
+# Double DQN — Role A ablation
+network: "double"
+hidden: 256
+total_steps: 500000
+gamma: 0.99
+lr: 0.0003
+batch_size: 128
+buffer_size: 200000
+warmup_steps: 5000
+train_freq: 4
+target_update_freq: 2000
+eps_start: 1.0
+eps_end: 0.05
+eps_decay_steps: 300000
+eval_freq: 50000
