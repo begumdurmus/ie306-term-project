@@ -37,7 +37,7 @@ Off-policy actor-critic for continuous control (Lillicrap et al., 2016) on Drone
 | Method | mean_return |
 |--------|-------------|
 | Random | -266.45 |
-| DDPG | in progress |
+| DDPG (DroneControl-v0) | mean_return: -4.56 +- 1.18 |
 
 ---
 
