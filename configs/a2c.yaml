@@ -1,0 +1,11 @@
+algorithm: A2C
+obs_dim: 581
+n_actions: 169
+hidden_size: 256
+learning_rate: 0.0001
+gamma: 0.99
+entropy_coef: 0.01
+value_coef: 0.5
+gae_lambda: 0.95
+n_episodes: 2000
+seeds: [0, 1, 2]
