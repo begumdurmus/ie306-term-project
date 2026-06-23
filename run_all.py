@@ -68,6 +68,7 @@ def main():
         ("DQN Plain",   "dqn_plain_best.pt",   "plain"),
         ("Double DQN",  "dqn_double_best.pt",  "double"),
         ("Dueling DQN", "dqn_dueling_best.pt", "dueling"),
+        ("Dueling DQN (tuned)", "dqn_dueling_tuned_best.pt", "dueling"),
     ]
 
     for name, fname, ntype in models:
