@@ -26,3 +26,13 @@ def bfs_distances(grid, source):
                 queue.append((nx, ny))
 
     return dist
+
+def nearest_hub_distance(grid):
+    """Her hucreden en yakin hub/sarj hucresine BFS mesafesi."""
+    hub_cells = list(zip(*np.where(grid == CHARGER)))
+    H, W = grid.shape
+    best = np.full((H, W), np.inf)        # her hucre icin en yakin hub mesafesi
+    for hub in hub_cells:
+        d = bfs_distances(grid, hub)       # bu hub'dan tum hucrelere mesafe
+        best = np.minimum(best, d)         # hucre bazinda kucugunu tut
+    return best
