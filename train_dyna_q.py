@@ -89,5 +89,35 @@ def train(episodes=30, planning_steps=10, seed=0,
     return agent
 
 
+def load_config(path):
+    """yaml config'i oku (basit anahtar: deger formatinda)."""
+    import yaml
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
 if __name__ == "__main__":
-    train(episodes=400, planning_steps=10, seed=0)
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="configs/dyna_q.yaml")
+    ap.add_argument("--planning-steps", type=int, default=None,
+                    help="config'i ezerek planlama adimini ayarla (ablasyon icin)")
+    ap.add_argument("--tag", default="dyna_q",
+                    help="cikti dosya adi etiketi (orn. ablasyon icin n0, n5)")
+    args = ap.parse_args()
+
+    cfg_hp = load_config(args.config)
+    planning = args.planning_steps if args.planning_steps is not None else cfg_hp["planning_steps"]
+    seeds = cfg_hp.get("seeds", [0, 1, 2])
+
+    for seed in seeds:
+        print(f"\n===== SEED {seed} (planning_steps={planning}) =====")
+        train(
+            episodes=cfg_hp["episodes"],
+            planning_steps=planning,
+            seed=seed,
+            eps_start=cfg_hp["eps_start"],
+            eps_end=cfg_hp["eps_end"],
+            out_weights=f"weights/{args.tag}_seed{seed}.npz",
+            out_log=f"logs/{args.tag}_seed{seed}.csv",
+        )
