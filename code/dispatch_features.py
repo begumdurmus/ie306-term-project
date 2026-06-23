@@ -4,6 +4,7 @@ from collections import deque
 
 # grid hucre kodlari (gozlemde gorduk): 0=bos, 1=yasak, 3=sarj/hub
 FREE, NOFLY, CHARGER = 0, 1, 3
+CHARGE_ZONE = 0.45   # bu soc'un USTUNDE Dyna-Q'ya sorulmaz, direkt ASSIGN
 def bfs_distances(grid, source):
     """source hucresinden her hucreye en kisa yol uzakligi (yasak hucreler dolasilarak).
     Ulasilamayan / yasak hucreler np.inf kalir."""
@@ -48,8 +49,10 @@ def bucket(x, edges):
             break
     return b
 
-# makro-aksiyonlar
-ASSIGN, CHARGE, HOLD = 0, 1, 2
+# makro-aksiyonlar (yeni tasarim: sadece ASSIGN vs CHARGE; HOLD kaldirildi)
+ASSIGN, CHARGE = 0, 1
+HOLD = -1   # artik kullanilmiyor (geriye uyumluluk icin)
+N_ACTIONS = 2
 
 # kova sinirlari (her ozellik icin)
 SOC_EDGES    = [0.15, 0.30, 0.45, 0.60, 0.80]   # 6 kova: soc
@@ -76,7 +79,7 @@ def decision_context(obs, cfg, hub_field):
 
     # 2) Atanacak (drone, siparis) cifti yoksa: sadece HOLD mumkun
     if len(idle_drones) == 0 or len(order_slots) == 0:
-        macro_mask = np.array([False, False, True])   # sadece HOLD
+        macro_mask = np.array([False, False])   # gercek karar yok
         return None, macro_mask, -1, -1, cfg.noop_index, {}
 
     # 3) En yakin (drone, siparis) cifti = odak drone (greedy gibi)
@@ -120,9 +123,22 @@ def decision_context(obs, cfg, hub_field):
         bucket(pressure,  PRESS_EDGES),
     )
 
-    # 6) Hangi makro-aksiyonlar gecerli?
-    can_charge = bool(mask[cfg.charge_index(focal)])      # odak drone sarja gidebilir mi
-    macro_mask = np.array([True, can_charge, True])       # ASSIGN, CHARGE, HOLD
+   # 6) Maske mantigi (depletion-farkinda):
+    #    - is drone'u tuketecekse (marj cok dusuk): ASSIGN yasak, CHARGE zorunlu
+    #    - aksi halde soc kritik bolgedeyse: Dyna-Q karar versin (ASSIGN vs CHARGE)
+    #    - soc yuksek + is guvenli: sadece ASSIGN
+    charge_ok = bool(mask[cfg.charge_index(focal)])       # env sarja izin veriyor mu
+    SAFETY = 0.05                                          # marj guvenlik tamponu
+
+    if margin < SAFETY and charge_ok:
+        # bu isi alirsa tukenir -> ASSIGN'i kapat, sarja zorla
+        can_assign = False
+        can_charge = True
+    else:
+        can_assign = True
+        can_charge = charge_ok and (soc < CHARGE_ZONE)    # sarj sadece kritik bolgede secenek
+
+    macro_mask = np.array([can_assign, can_charge])       # ASSIGN, CHARGE
 
     # 7) Makro-aksiyonu env aksiyon numarasina cevirmek icin gereken bilgiler
     assign_action = cfg.assign_index(focal, slot)

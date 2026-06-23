@@ -1,7 +1,7 @@
 """Rol C - Planning: Tablosal Dyna-Q ajani (Q-learning + model + planlama)."""
 import numpy as np
 
-N_ACTIONS = 3   # ASSIGN, CHARGE, HOLD
+N_ACTIONS = 2   # ASSIGN, CHARGE, HOLD
 
 
 class DynaQAgent:

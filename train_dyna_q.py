@@ -8,26 +8,23 @@ import gymnasium as gym
 import drone_dispatch_env
 from drone_dispatch_env import Config
 
-from dispatch_features import decision_context, nearest_hub_distance, ASSIGN, CHARGE, HOLD
+from dispatch_features import decision_context, nearest_hub_distance, ASSIGN, CHARGE
 from dyna_q_agent import DynaQAgent
 
 
 def macro_to_env_action(macro, assign_action, charge_action, noop_action):
-    """Secilen makro-aksiyonu (0/1/2) env'in gercek aksiyon numarasina cevir."""
-    if macro == ASSIGN:
-        return assign_action
+    """Secilen makro-aksiyonu (0=ASSIGN, 1=CHARGE) env aksiyon numarasina cevir."""
     if macro == CHARGE:
         return charge_action
-    return noop_action
+    return assign_action   # varsayilan: ata
 
-
-def run_episode(agent, env, cfg, seed, eps):
-    """Tek bir episode kostur; ajan ogrensin. Toplam odulu dondur."""
+def run_episode(agent, env, cfg, seed, eps, charge_penalty=2.0):
+    """Tek bir episode kostur; ajan ogrensin. Toplam odulu dondur.
+    charge_penalty: CHARGE secimine eklenen anlik ceza (kredi-atama duzeltmesi)."""
     obs, _ = env.reset(seed=seed)
     hub_field = nearest_hub_distance(obs["grid"])      # bu episode icin hub mesafeleri
     total_reward = 0.0
     done = False
-
     while not done:
         state, mask, a_act, c_act, n_act, info = decision_context(obs, cfg, hub_field)
 
@@ -40,15 +37,16 @@ def run_episode(agent, env, cfg, seed, eps):
         macro = agent.select(state, mask, eps)         # ajan karar versin
         env_action = macro_to_env_action(macro, a_act, c_act, n_act)
         obs, r, term, trunc, _ = env.step(env_action)  # env'de uygula
-        total_reward += r
+        total_reward += r                              # gercek odul (raporlama icin)
         done = term or trunc
+        r_learn = r - charge_penalty if macro == CHARGE else r   # ajanin gordugu odul
 
         if done:
-            agent.observe(state, macro, r, None, True)
+            agent.observe(state, macro, r_learn, None, True)
         else:
             next_state, _, _, _, _, _ = decision_context(obs, cfg, hub_field)
-            agent.observe(state, macro, r, next_state, False)
-        agent.plan()                                   # hayali pratik
+            agent.observe(state, macro, r_learn, next_state, False)
+        agent.plan()                                   # hayali pratik                                   # hayali pratik
 
     return total_reward
 
