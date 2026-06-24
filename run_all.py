@@ -6,16 +6,18 @@ Usage:
     python run_all.py --config configs/eval_standard.yaml --seeds 0,1,2
 """
 import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "drone_dispatch_env"))
 import argparse
-import os
 import torch
 import numpy as np
 import gymnasium as gym
 import drone_dispatch_env
 from drone_dispatch_env import Config, evaluate
 from drone_dispatch_env.baselines import RandomPolicy, GreedyNearest, MILPRolling
-
+# Rol C - Dyna-Q (Planning)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "code"))
+from dyna_q_policy import DynaQPolicy
 # import from train_dqn.py
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
@@ -74,13 +76,30 @@ def main():
     for name, fname, ntype in models:
         path = os.path.join(weight_dir, fname)
         if not os.path.exists(path):
-            print(f"  [SKIP] {name} — weight not found: {path}")
+            print(f"  [SKIP] {name} - weight not found: {path}")
             continue
         print(f"Evaluating {name}...")
-        policy = load_dqn(path, network_type=ntype)
-        r = evaluate(policy, cfg, seeds)
-        results.append((name, r["mean"]))
-
+        try:
+            policy = load_dqn(path, network_type=ntype)
+            r = evaluate(policy, cfg, seeds)
+            results.append((name, r["mean"]))
+        except Exception as e:
+            print(f"  [SKIP] {name} - load/eval error: {e}")
+            continue
+    # Rol C - Dyna-Q (Planning): 3 seed ortalamasi
+    print("Evaluating Dyna-Q (Planning)...")
+    dyna_costs = []
+    for s in [0, 1, 2]:
+        wpath = os.path.join(weight_dir, f"dyna_q_seed{s}.npz")
+        if os.path.exists(wpath):
+            r = evaluate(DynaQPolicy(cfg, wpath), cfg, seeds)
+            dyna_costs.append(r["mean"])
+    if dyna_costs:
+        # 3 seed'in ortalamasini al
+        avg = {k: float(np.mean([m[k] for m in dyna_costs])) for k in dyna_costs[0]}
+        results.append(("Dyna-Q (Planning, 3-seed avg)", avg))
+    else:
+        print("  [SKIP] Dyna-Q weights not found")
     print_table(results)
 
 
