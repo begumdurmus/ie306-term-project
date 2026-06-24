@@ -1,4 +1,128 @@
 # IE306 Term Project Report
+---
+
+## Role A — Value-based Methods (DQN Family)
+**Student:** Furkan Çalışkan
+
+---
+
+## A.1 Methods
+
+### A.1.1 Plain DQN
+Mnih et al. (2015) tarafından önerilen temel Deep Q-Network. 2-layer MLP, replay buffer ve target network kullanıyor.
+
+**Implementasyon detayları:**
+- Observation: drones (8×10), orders (20×5), drone-order Manhattan distance matrix (8×20), time (1) → 341 boyutlu vektör
+- Grid observation kaldırıldı (400 sayı, çok gürültülü, öğrenmeyi zorlaştırıyor)
+- age → time_left = (60 - age) / 60 (deadline urgency için)
+- Action mask: geçersiz aksiyonlar -inf ile maskelendi
+- Replay buffer: 200k kapasite
+- Linear epsilon decay: 1.0 → 0.05 (300k step)
+
+### A.1.2 Double DQN
+Van Hasselt et al. (2016). Plain DQN'deki Q-value overestimation sorununu çözmek için online network aksiyon seçer, target network değerlendirir.
+
+**Plain DQN'den fark:**
+```python
+# Plain DQN: target net hem seçer hem değerlendirir
+next_q = q_target(nobs).max(dim=1)[0]
+
+# Double DQN: online net seçer, target net değerlendirir
+next_actions = q_net(nobs).argmax(dim=1)
+next_q = q_target(nobs).gather(1, next_actions.unsqueeze(1)).squeeze(1)
+```
+
+### A.1.3 Dueling DQN
+Wang et al. (2016). Q(s,a) = V(s) + A(s,a) - mean(A) şeklinde ayrıştırılıyor. State value ve advantage ayrı ayrı tahmin ediliyor, daha iyi generalization sağlıyor.
+
+**Hiperparametre tuning:**
+- v1: hidden=256, lr=0.0003 → cost=11.14
+- v2 (tuned): hidden=512, lr=0.0001 → cost=9.09 (en iyi)
+
+---
+
+## A.2 Results
+
+### A.2.1 Baseline Karşılaştırması (seeds: 0,1,2)
+
+| Method | cost_per_order | success_rate | ontime_rate |
+|--------|---------------|--------------|-------------|
+| Random | 18.78 | 0.653 | 0.890 |
+| greedy_nearest (baseline) | **4.57** | 0.855 | 0.903 |
+| Plain DQN | 22.46 | 0.453 | 0.972 |
+| Double DQN | 9.79 | 0.625 | 0.931 |
+| Dueling DQN (tuned) | 9.09 | 0.614 | 0.876 |
+
+**En iyi sonuç: Dueling DQN (tuned) → 9.09**
+
+Baseline (4.57) yenilemiyor. Bunun nedenleri Section A.4'te açıklanıyor.
+
+---
+
+## A.3 Ablation — DQN Variant Karşılaştırması
+
+| Variant | cost_per_order | Yorum |
+|---------|---------------|-------|
+| Plain DQN | 22.46 | En kötü — overestimation problemi |
+| Double DQN | 9.79 | %56 iyileşme — overestimation çözüldü |
+| Dueling DQN | 11.14 | Plain'den iyi ama Double'dan kötü |
+| Dueling DQN (tuned) | 9.09 | En iyi — lr ve hidden size optimize edildi |
+
+**Bulgu:** Double DQN en tutarlı iyileşmeyi sağladı. Dueling tek başına Double'dan kötü çıktı — bu seed'e ve hiperparametreye bağlı olabilir. Tuned Dueling (hidden=512, lr=0.0001) en iyi sonucu verdi.
+
+---
+
+## A.4 Analysis
+
+### Neden greedy_nearest yenilemiyor?
+
+**1. Büyük ve sparse action space:**
+169 aksiyon (8 drone × 20 sipariş slot + 8 şarj + 1 no-op). Her aksiyonun değerini öğrenmek çok fazla örnek gerektiriyor. CPU'da 500k step yaklaşık 50 dakika sürüyor; yeterli exploration yapılamıyor.
+
+**2. Greedy çok güçlü bir baseline:**
+greedy_nearest domain knowledge kullanıyor: routed distance hesaplayarak en yakın drone-sipariş çiftini atıyor. Bu basit ama son derece etkili. RL'in bunu sıfırdan öğrenmesi için milyonlarca adım gerekiyor.
+
+**3. Observation'da routed distance yok:**
+Greedy nearest BFS ile gerçek routed distance kullanıyor. Bizim DQN sadece Manhattan distance görüyor — no-fly zone'lar etrafında yanlış tahminler yapıyor.
+
+**4. Unstable training:**
+Cost değerleri eğitim boyunca dalgalandı (örneğin 50k: 78, 100k: 11, 150k: 17). Bu, replay buffer'ın henüz yeterince dolmadığını ve epsilon'ın çok hızlı düştüğünü gösteriyor.
+
+**5. CPU sınırlılığı:**
+GPU olmadan 1M step ~90 dakika sürüyor. Yeterli hyperparameter search yapılamadı.
+
+### Neden Double DQN Plain'den çok daha iyi?
+
+Plain DQN Q değerlerini sistematik olarak overestimate ediyor. 169 aksiyonlu bu ortamda bu overestimation çok belirgin — ajan yanlış aksiyonları iyi sanıp tekrar tekrar seçiyor. Double DQN bunu düzeltiyor.
+
+### Neden imitation learning çalışmadı?
+
+Greedy nearest'in kararlarını supervised learning ile öğretmeyi denedik (v5). Ancak cross-entropy loss 1.6'da takıldı — greedy 169 aksiyondan stochastic seçim yapıyor gibi görünüyor (farklı koşullarda farklı aksiyonlar), network bunu öğrenemedi.
+
+---
+
+## A.5 Method Origins
+
+| Method | Paper | Neden Seçildi |
+|--------|-------|---------------|
+| DQN | Mnih et al. (2015) | Temel value-based baseline |
+| Double DQN | Van Hasselt et al. (2016) | Overestimation düzeltmek için |
+| Dueling DQN | Wang et al. (2016) | State value/advantage ayrıştırması |
+
+---
+
+## A.6 Engineering Log
+
+| Deney | Sonuç | Neden |
+|-------|-------|-------|
+| v1: Grid dahil, exp decay | cost=89 (50k) | Grid gürültülü, epsilon çok hızlı düştü |
+| v2: Grid kaldırıldı | cost=19.3 (100k) | İyileşme ama unstable |
+| v3: time_left eklendi | cost=13.4 (100k) | Deadline urgency eklendi |
+| v4: Distance matrix eklendi | cost=11.5 (100k) | Drone-order mesafesi eklendi |
+| v5: Imitation learning | cost=13.8 | Greedy taklit edilemedi |
+| Final: Dueling tuned | cost=9.09 | lr=0.0001, hidden=512 |
+
+
 ## Role B — Policy-based Methods
 **Student:** Begüm Durmuş
 
@@ -158,3 +282,115 @@ DroneControl-v0 çok daha basit bir ortam: 7 boyutlu obs, 2 boyutlu continuous a
 | BC 5000 ep, 100 epoch | cost=5.70 | En iyi sonuç |
 | BC 10000 ep, 200 epoch | cost=8.06 | Overfitting |
 | BC+A2C fine-tune | cost=25+ | A2C modeli bozdu |
+
+
+
+---
+---
+
+# ROL C — Planning / Model-Based Acceleration (Dyna-Q)
+
+## C.1 Methods
+
+### C.1.1 Tabular Dyna-Q
+Model-tabanli hizlandirma yontemi (Sutton, 1990). Uc bilesen: (1) gercek
+deneyimle Q-learning guncellemesi, (2) ogrenilen bir cevre modeli, (3) her
+gercek adimdan sonra modelden cekilen n adet "hayali" deneyimle ek Q
+guncellemesi (planlama). Planlama, az sayidaki gercek deneyimden cok daha fazla
+ogrenme cikararak ornek-verimliligini artirir â€” rolun ozu budur.
+
+Saf numpy ile tablosal olarak yazildi (sinir agi yok). Bu, A ve B rollerinin
+derin ag tabanli yontemlerinden kasitli olarak farkli: daha yorumlanabilir,
+hafif ve tamamen tekrar-uretilebilir.
+
+### C.1.2 Durum soyutlamasi (state abstraction)
+169 boyutlu ham aksiyon uzayinda ogrenmek yerine, problemi operasyonel olarak
+ayristirdik. Her karar aninda bir "odak drone" secilir (greedy gibi, atanmayi
+bekleyen siparise en yakin bos drone) ve kontrolcu sadece su iki makro-aksiyon
+arasinda secim yapar:
+- **ASSIGN:** odak drone'a en yakin siparisi ata
+- **CHARGE:** odak drone'u sarja gonder
+
+Odak drone'un durumu 5 ozellige indirgenip ayrik kovalara (bucket) bolunur:
+SoC, en yakin hub mesafesi, **bitirme marji** (soc - tahmini is enerjisi),
+siparis aciliyeti, talep baskisi. ~2000 durum Ã— 2 aksiyon â€” tablosal ogrenmeye
+uygun, hizli yakinsayan kompakt bir tablo.
+
+Tum rotali (no-fly-farkinda) mesafeler, gozlemdeki grid uzerinden kendi
+yazdigimiz BFS ile hesaplanir â€” donmus `Policy` kontratina sadik kalinir
+(env ic organlarina dokunulmaz).
+
+### C.1.3 Depletion-farkinda maske (kilit tasarim)
+greedy enerji-kor: sadece anlik SoC'a bakar, bir drone'u bitiremeyecegi uzun
+bir ise yollayip yolda tuketebilir (-50 ceza). Bizim kontrolcumuz **ileriye
+bakar**: `marj = soc - is_enerjisi` negatifse, o is drone'u tuketir. Bu durumda
+ASSIGN maskeden cikarilir ve CHARGE'a zorlanir. greedy'nin yapisal olarak
+goremedigi bu on-gorulu enerji yonetimi, greedy'yi gecmenin temel sebebidir.
+
+---
+
+## C.2 Results
+
+Standart eval config, 3 seed (0,1,2) ortalamasi. `run_all.py` ile uretildi.
+
+| Method | cost_per_order | depletion | n_dropped | n_delivered |
+|--------|---------------|-----------|-----------|-------------|
+| random | 18.78 | 8.0 | 21.7 | 39.7 |
+| greedy_nearest (baseline) | 4.57 | 4.0 | 20.0 | 118.3 |
+| milp_rolling | 4.72 | 3.3 | 23.0 | 118.0 |
+| **Dyna-Q (Planning)** | **0.78 Â± 0.04** | **0.0** | **4.7** | **138.7** |
+
+Dyna-Q, greedy'yi ~6 kat (4.57 â†’ 0.78) ve MILP'i 6 kat geride birakti. Uc seedde
+de **sifir depletion** elde edildi (std=0.04 â€” yontem kararli, tek sanslik kosu
+degil). Kazanim, depletion-farkinda maskenin tum drone'lari hayatta tutmasindan
+kaynaklanir: filo tam kapasite caliÅŸinca hem teslimat artar (138 > 118) hem
+dusen siparis azalir (4.7 < 20).
+
+---
+
+## C.3 Ablation â€” Planning Steps (n) Sweep
+
+Dyna planlama adiminin (n) etkisi. Her n icin 3 seed, 400 episode.
+
+| n (planning_steps) | cost_per_order | Yorum |
+|---|---|---|
+| 0 | 0.964 Â± 0.063 | Planlama yok = saf Q-learning (model-free) |
+| 5 | 0.807 Â± 0.072 | Planlama faydasi basliyor |
+| **10** | **0.781 Â± 0.037** | **En iyi (tatli nokta)** |
+| 50 | 0.846 Â± 0.053 | Marjinal fazlalik, hafif geriye |
+
+**Bulgu:** Planlama performansi belirgin iyilestiriyor (0.96 â†’ 0.78). Ancak fayda
+n=10 civarinda doyuma ulasiyor; n=50'de hafif geriliyor â€” ders kitabi Dyna
+davranisiyla tutarli (planlama ornek-verimliligini artirir ama doyum noktasi
+vardir). Bu yuzden ana model n=10 ile egitildi. **Onemli ayrim:** greedy'yi
+gecmenin sebebi planlama degil, mimari tasarim (depletion-farkinda maske) â€”
+cunku n=0 bile greedy'yi rahatca geciyor. Planlama bunun uzerine ek iyilestirme
+saglar.
+
+(Bkz. `logs/ablation_planning.png` ve `logs/learning_curve_ablation.png`.)
+
+---
+
+## C.4 Method Origins
+
+| Method | Paper | Neden Secildi |
+|--------|-------|---------------|
+| Dyna-Q | Sutton (1990), "Integrated Architectures for Learning, Planning and Reacting" | Model-tabanli hizlandirma; teslimat kalemleri (ogrenme egrisi, agirlik, n-sweep ablasyonu) ile birebir ortusur ve eval'de sadece obs gerektirir (donmus act() kontratina uygun) |
+| Q-learning | Watkins (1989) | Dyna'nin direkt-RL bileseni |
+
+---
+
+## C.5 Engineering Log â€” "Ne Bozuldu, Nasil Teshis Ettik"
+
+| Deney / Sorun | Belirti | Teshis | Cozum |
+|-------|-------|--------|-------|
+| Ilk 3-aksiyonlu tasarim (ASSIGN/CHARGE/HOLD) | cost=21.7, drops=72 | Aksiyon sayimi: ajan 344 kez CHARGE/HOLD, 71 kez ASSIGN seciyor | Mimari sadelestirme: HOLD kaldirildi |
+| 2-aksiyonlu, ham odul | deliv=0, cost=2033 | Ajan hep CHARGE seciyor; odul kredi atamasi bozuk (env'de assign/charge zamani ilerletmez) | CHARGE'a anlik odul cezasi + CHARGE_ZONE |
+| Politika sarmalayici | deliv=0 (hala) | Aksiyon izleme: ASSIGN secilse bile `act()` noop donduruyor | `return n_act` -> `return a_act` (2'liye gecerken kalan bug) |
+| Depletion patlamasi | episode sonu 8 drone'dan 1'i sag | Hayatta kalan drone sayaci: 7 drone yolda tukeniyor | Depletion-farkinda maske: marj negatifse ASSIGN yasak |
+| **Nihai** | **cost=0.78, depletion=0** | â€” | **greedy 6 kat geÃ§ildi** |
+
+Bu teshis zinciri (asiri-CHARGE -> mimari sadelestirme -> noop bug -> depletion
+korumasi) yontemin nasil adim adim duzeltildigini gosterir. Her sorun, ajanin
+gercek davranisi olcuLerek (aksiyon dagilimi, hayatta kalan drone sayisi) teshis
+edildi; korlemesine parametre denenmedi.
