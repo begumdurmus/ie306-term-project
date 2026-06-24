@@ -158,3 +158,115 @@ DroneControl-v0 çok daha basit bir ortam: 7 boyutlu obs, 2 boyutlu continuous a
 | BC 5000 ep, 100 epoch | cost=5.70 | En iyi sonuç |
 | BC 10000 ep, 200 epoch | cost=8.06 | Overfitting |
 | BC+A2C fine-tune | cost=25+ | A2C modeli bozdu |
+
+
+
+---
+---
+
+# ROL C — Planning / Model-Based Acceleration (Dyna-Q)
+
+## C.1 Methods
+
+### C.1.1 Tabular Dyna-Q
+Model-tabanli hizlandirma yontemi (Sutton, 1990). Uc bilesen: (1) gercek
+deneyimle Q-learning guncellemesi, (2) ogrenilen bir cevre modeli, (3) her
+gercek adimdan sonra modelden cekilen n adet "hayali" deneyimle ek Q
+guncellemesi (planlama). Planlama, az sayidaki gercek deneyimden cok daha fazla
+ogrenme cikararak ornek-verimliligini artirir â€” rolun ozu budur.
+
+Saf numpy ile tablosal olarak yazildi (sinir agi yok). Bu, A ve B rollerinin
+derin ag tabanli yontemlerinden kasitli olarak farkli: daha yorumlanabilir,
+hafif ve tamamen tekrar-uretilebilir.
+
+### C.1.2 Durum soyutlamasi (state abstraction)
+169 boyutlu ham aksiyon uzayinda ogrenmek yerine, problemi operasyonel olarak
+ayristirdik. Her karar aninda bir "odak drone" secilir (greedy gibi, atanmayi
+bekleyen siparise en yakin bos drone) ve kontrolcu sadece su iki makro-aksiyon
+arasinda secim yapar:
+- **ASSIGN:** odak drone'a en yakin siparisi ata
+- **CHARGE:** odak drone'u sarja gonder
+
+Odak drone'un durumu 5 ozellige indirgenip ayrik kovalara (bucket) bolunur:
+SoC, en yakin hub mesafesi, **bitirme marji** (soc - tahmini is enerjisi),
+siparis aciliyeti, talep baskisi. ~2000 durum Ã— 2 aksiyon â€” tablosal ogrenmeye
+uygun, hizli yakinsayan kompakt bir tablo.
+
+Tum rotali (no-fly-farkinda) mesafeler, gozlemdeki grid uzerinden kendi
+yazdigimiz BFS ile hesaplanir â€” donmus `Policy` kontratina sadik kalinir
+(env ic organlarina dokunulmaz).
+
+### C.1.3 Depletion-farkinda maske (kilit tasarim)
+greedy enerji-kor: sadece anlik SoC'a bakar, bir drone'u bitiremeyecegi uzun
+bir ise yollayip yolda tuketebilir (-50 ceza). Bizim kontrolcumuz **ileriye
+bakar**: `marj = soc - is_enerjisi` negatifse, o is drone'u tuketir. Bu durumda
+ASSIGN maskeden cikarilir ve CHARGE'a zorlanir. greedy'nin yapisal olarak
+goremedigi bu on-gorulu enerji yonetimi, greedy'yi gecmenin temel sebebidir.
+
+---
+
+## C.2 Results
+
+Standart eval config, 3 seed (0,1,2) ortalamasi. `run_all.py` ile uretildi.
+
+| Method | cost_per_order | depletion | n_dropped | n_delivered |
+|--------|---------------|-----------|-----------|-------------|
+| random | 18.78 | 8.0 | 21.7 | 39.7 |
+| greedy_nearest (baseline) | 4.57 | 4.0 | 20.0 | 118.3 |
+| milp_rolling | 4.72 | 3.3 | 23.0 | 118.0 |
+| **Dyna-Q (Planning)** | **0.78 Â± 0.04** | **0.0** | **4.7** | **138.7** |
+
+Dyna-Q, greedy'yi ~6 kat (4.57 â†’ 0.78) ve MILP'i 6 kat geride birakti. Uc seedde
+de **sifir depletion** elde edildi (std=0.04 â€” yontem kararli, tek sanslik kosu
+degil). Kazanim, depletion-farkinda maskenin tum drone'lari hayatta tutmasindan
+kaynaklanir: filo tam kapasite caliÅŸinca hem teslimat artar (138 > 118) hem
+dusen siparis azalir (4.7 < 20).
+
+---
+
+## C.3 Ablation â€” Planning Steps (n) Sweep
+
+Dyna planlama adiminin (n) etkisi. Her n icin 3 seed, 400 episode.
+
+| n (planning_steps) | cost_per_order | Yorum |
+|---|---|---|
+| 0 | 0.964 Â± 0.063 | Planlama yok = saf Q-learning (model-free) |
+| 5 | 0.807 Â± 0.072 | Planlama faydasi basliyor |
+| **10** | **0.781 Â± 0.037** | **En iyi (tatli nokta)** |
+| 50 | 0.846 Â± 0.053 | Marjinal fazlalik, hafif geriye |
+
+**Bulgu:** Planlama performansi belirgin iyilestiriyor (0.96 â†’ 0.78). Ancak fayda
+n=10 civarinda doyuma ulasiyor; n=50'de hafif geriliyor â€” ders kitabi Dyna
+davranisiyla tutarli (planlama ornek-verimliligini artirir ama doyum noktasi
+vardir). Bu yuzden ana model n=10 ile egitildi. **Onemli ayrim:** greedy'yi
+gecmenin sebebi planlama degil, mimari tasarim (depletion-farkinda maske) â€”
+cunku n=0 bile greedy'yi rahatca geciyor. Planlama bunun uzerine ek iyilestirme
+saglar.
+
+(Bkz. `logs/ablation_planning.png` ve `logs/learning_curve_ablation.png`.)
+
+---
+
+## C.4 Method Origins
+
+| Method | Paper | Neden Secildi |
+|--------|-------|---------------|
+| Dyna-Q | Sutton (1990), "Integrated Architectures for Learning, Planning and Reacting" | Model-tabanli hizlandirma; teslimat kalemleri (ogrenme egrisi, agirlik, n-sweep ablasyonu) ile birebir ortusur ve eval'de sadece obs gerektirir (donmus act() kontratina uygun) |
+| Q-learning | Watkins (1989) | Dyna'nin direkt-RL bileseni |
+
+---
+
+## C.5 Engineering Log â€” "Ne Bozuldu, Nasil Teshis Ettik"
+
+| Deney / Sorun | Belirti | Teshis | Cozum |
+|-------|-------|--------|-------|
+| Ilk 3-aksiyonlu tasarim (ASSIGN/CHARGE/HOLD) | cost=21.7, drops=72 | Aksiyon sayimi: ajan 344 kez CHARGE/HOLD, 71 kez ASSIGN seciyor | Mimari sadelestirme: HOLD kaldirildi |
+| 2-aksiyonlu, ham odul | deliv=0, cost=2033 | Ajan hep CHARGE seciyor; odul kredi atamasi bozuk (env'de assign/charge zamani ilerletmez) | CHARGE'a anlik odul cezasi + CHARGE_ZONE |
+| Politika sarmalayici | deliv=0 (hala) | Aksiyon izleme: ASSIGN secilse bile `act()` noop donduruyor | `return n_act` -> `return a_act` (2'liye gecerken kalan bug) |
+| Depletion patlamasi | episode sonu 8 drone'dan 1'i sag | Hayatta kalan drone sayaci: 7 drone yolda tukeniyor | Depletion-farkinda maske: marj negatifse ASSIGN yasak |
+| **Nihai** | **cost=0.78, depletion=0** | â€” | **greedy 6 kat geÃ§ildi** |
+
+Bu teshis zinciri (asiri-CHARGE -> mimari sadelestirme -> noop bug -> depletion
+korumasi) yontemin nasil adim adim duzeltildigini gosterir. Her sorun, ajanin
+gercek davranisi olcuLerek (aksiyon dagilimi, hayatta kalan drone sayisi) teshis
+edildi; korlemesine parametre denenmedi.
