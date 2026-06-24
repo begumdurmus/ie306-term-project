@@ -6,7 +6,7 @@ Usage:
     python run_all.py --config configs/eval_standard.yaml --seeds 0,1,2
 """
 import sys
-sys.path.insert(0, "C:\\Users\\User\\Desktop\\code\\drone_dispatch_env")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "drone_dispatch_env"))
 import argparse
 import os
 import torch
