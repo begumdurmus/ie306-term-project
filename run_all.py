@@ -7,8 +7,7 @@ Usage:
 """
 import sys
 import os
-sys.path.insert(0, "C:\\Users\\User\\Desktop\\code\\drone_dispatch_env")
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "drone_dispatch_env"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "drone_dispatch_env"))
 import argparse
 import torch
 import numpy as np
