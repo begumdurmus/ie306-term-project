@@ -5,7 +5,7 @@ Loads trained DQN models and compares against baselines.
 Usage:
     python run_all.py --config configs/eval_standard.yaml --seeds 0,1,2
 """
-
+import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "drone_dispatch_env"))
 import argparse
