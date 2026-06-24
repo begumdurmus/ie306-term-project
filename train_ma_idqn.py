@@ -61,4 +61,4 @@ def train(episodes=300, seed=0, eps_start=1.0, eps_end=0.05,
 
 
 if __name__ == "__main__":
-    train(episodes=30, seed=0)   # once kisa test
+    train(episodes=300, seed=0)   
