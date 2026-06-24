@@ -394,3 +394,84 @@ Bu teshis zinciri (asiri-CHARGE -> mimari sadelestirme -> noop bug -> depletion
 korumasi) yontemin nasil adim adim duzeltildigini gosterir. Her sorun, ajanin
 gercek davranisi olcuLerek (aksiyon dagilimi, hayatta kalan drone sayisi) teshis
 edildi; korlemesine parametre denenmedi.
+
+
+
+
+---
+
+## Joint Component 1 — Offline RL (Ch. 20)
+
+---
+
+### ORL.1 Dataset
+
+Mixed-quality dataset pooled from all three trained policies:
+- **Role A (Dueling DQN):** 19,986 transitions, mean_return=469.3
+- **Role B (BC+A2C):** 13,866 transitions, mean_return=823.8
+- **Role C (Dyna-Q):** 17,794 transitions, mean_return=1848.8
+- **Total:** 51,646 transitions
+
+Observation format: Role B's `obs_to_vector()` (581-dim) used as unified format.
+Dataset saved as `offline_dataset.npz`.
+
+---
+
+### ORL.2 Naive Offline DQN — Failure Analysis
+
+Standard Double DQN trained on the static dataset without any conservatism constraint.
+
+**Q-value divergence (overestimation):**
+
+| Step | mean_Q | max_Q |
+|------|--------|-------|
+| 5,000 | 20.23 | 53.92 |
+| 15,000 | 87.87 | 138.92 |
+| 30,000 | 201.49 | 294.95 |
+| 50,000 | 372.15 | **528.69** |
+
+**Result:** cost_per_order = **17.12**
+
+**Why it fails:** The static dataset does not cover all (state, action) pairs. For out-of-distribution (OOD) actions never seen in the dataset, the Q-network has no ground truth and freely extrapolates upward. The Bellman backup then propagates these inflated values, causing a feedback loop of ever-growing Q estimates. The agent ends up selecting OOD actions with unrealistically high Q values, performing poorly in the actual environment.
+
+---
+
+### ORL.3 CQL (Conservative Q-Learning) — Fix
+
+CQL adds a conservatism penalty to the standard Bellman loss:
+
+```
+L_CQL = L_Bellman + α * (logsumexp(Q(s,·)) - Q(s, a_data))
+```
+
+This penalizes high Q values on actions not supported by the dataset, keeping Q estimates conservative on OOD actions.
+
+**Q-value comparison (step 50,000):**
+
+| Method | mean_Q | max_Q | cost_per_order |
+|--------|--------|-------|---------------|
+| Naive Offline DQN | 372.15 | 528.69 | 17.12 |
+| CQL (α=1.0) | 61.66 | **216.25** | **11.80** |
+
+**Result:** CQL reduces max_Q by **59%** and cost_per_order by **31%** compared to naive offline DQN.
+
+**Why CQL works:** The logsumexp term explicitly penalizes the network for assigning high Q values to any action, while the subtraction of Q(s, a_data) ensures in-distribution actions are not penalized. This pushes the policy to stay within the support of the dataset.
+
+---
+
+### ORL.4 Behavioral Cloning Baseline
+
+For completeness, the BC+A2C policy (Role B) serves as the behavioral cloning baseline:
+- BC+A2C cost_per_order = **5.70**
+
+**Summary:**
+
+| Method | cost_per_order |
+|--------|---------------|
+| Behavioral Cloning (BC+A2C) | 5.70 |
+| CQL (offline RL) | 11.80 |
+| Naive Offline DQN | 17.12 |
+| greedy_nearest (baseline) | 4.57 |
+
+CQL beats naive offline DQN as expected, but does not beat the behavioral cloning baseline. This is consistent with the literature: when the dataset contains a strong expert policy (Dyna-Q with cost=0.78), CQL can exploit it but the mixed dataset quality limits performance.
+
