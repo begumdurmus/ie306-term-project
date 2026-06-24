@@ -1,4 +1,128 @@
 # IE306 Term Project Report
+---
+
+## Role A — Value-based Methods (DQN Family)
+**Student:** Furkan Çalışkan
+
+---
+
+## A.1 Methods
+
+### A.1.1 Plain DQN
+Mnih et al. (2015) tarafından önerilen temel Deep Q-Network. 2-layer MLP, replay buffer ve target network kullanıyor.
+
+**Implementasyon detayları:**
+- Observation: drones (8×10), orders (20×5), drone-order Manhattan distance matrix (8×20), time (1) → 341 boyutlu vektör
+- Grid observation kaldırıldı (400 sayı, çok gürültülü, öğrenmeyi zorlaştırıyor)
+- age → time_left = (60 - age) / 60 (deadline urgency için)
+- Action mask: geçersiz aksiyonlar -inf ile maskelendi
+- Replay buffer: 200k kapasite
+- Linear epsilon decay: 1.0 → 0.05 (300k step)
+
+### A.1.2 Double DQN
+Van Hasselt et al. (2016). Plain DQN'deki Q-value overestimation sorununu çözmek için online network aksiyon seçer, target network değerlendirir.
+
+**Plain DQN'den fark:**
+```python
+# Plain DQN: target net hem seçer hem değerlendirir
+next_q = q_target(nobs).max(dim=1)[0]
+
+# Double DQN: online net seçer, target net değerlendirir
+next_actions = q_net(nobs).argmax(dim=1)
+next_q = q_target(nobs).gather(1, next_actions.unsqueeze(1)).squeeze(1)
+```
+
+### A.1.3 Dueling DQN
+Wang et al. (2016). Q(s,a) = V(s) + A(s,a) - mean(A) şeklinde ayrıştırılıyor. State value ve advantage ayrı ayrı tahmin ediliyor, daha iyi generalization sağlıyor.
+
+**Hiperparametre tuning:**
+- v1: hidden=256, lr=0.0003 → cost=11.14
+- v2 (tuned): hidden=512, lr=0.0001 → cost=9.09 (en iyi)
+
+---
+
+## A.2 Results
+
+### A.2.1 Baseline Karşılaştırması (seeds: 0,1,2)
+
+| Method | cost_per_order | success_rate | ontime_rate |
+|--------|---------------|--------------|-------------|
+| Random | 18.78 | 0.653 | 0.890 |
+| greedy_nearest (baseline) | **4.57** | 0.855 | 0.903 |
+| Plain DQN | 22.46 | 0.453 | 0.972 |
+| Double DQN | 9.79 | 0.625 | 0.931 |
+| Dueling DQN (tuned) | 9.09 | 0.614 | 0.876 |
+
+**En iyi sonuç: Dueling DQN (tuned) → 9.09**
+
+Baseline (4.57) yenilemiyor. Bunun nedenleri Section A.4'te açıklanıyor.
+
+---
+
+## A.3 Ablation — DQN Variant Karşılaştırması
+
+| Variant | cost_per_order | Yorum |
+|---------|---------------|-------|
+| Plain DQN | 22.46 | En kötü — overestimation problemi |
+| Double DQN | 9.79 | %56 iyileşme — overestimation çözüldü |
+| Dueling DQN | 11.14 | Plain'den iyi ama Double'dan kötü |
+| Dueling DQN (tuned) | 9.09 | En iyi — lr ve hidden size optimize edildi |
+
+**Bulgu:** Double DQN en tutarlı iyileşmeyi sağladı. Dueling tek başına Double'dan kötü çıktı — bu seed'e ve hiperparametreye bağlı olabilir. Tuned Dueling (hidden=512, lr=0.0001) en iyi sonucu verdi.
+
+---
+
+## A.4 Analysis
+
+### Neden greedy_nearest yenilemiyor?
+
+**1. Büyük ve sparse action space:**
+169 aksiyon (8 drone × 20 sipariş slot + 8 şarj + 1 no-op). Her aksiyonun değerini öğrenmek çok fazla örnek gerektiriyor. CPU'da 500k step yaklaşık 50 dakika sürüyor; yeterli exploration yapılamıyor.
+
+**2. Greedy çok güçlü bir baseline:**
+greedy_nearest domain knowledge kullanıyor: routed distance hesaplayarak en yakın drone-sipariş çiftini atıyor. Bu basit ama son derece etkili. RL'in bunu sıfırdan öğrenmesi için milyonlarca adım gerekiyor.
+
+**3. Observation'da routed distance yok:**
+Greedy nearest BFS ile gerçek routed distance kullanıyor. Bizim DQN sadece Manhattan distance görüyor — no-fly zone'lar etrafında yanlış tahminler yapıyor.
+
+**4. Unstable training:**
+Cost değerleri eğitim boyunca dalgalandı (örneğin 50k: 78, 100k: 11, 150k: 17). Bu, replay buffer'ın henüz yeterince dolmadığını ve epsilon'ın çok hızlı düştüğünü gösteriyor.
+
+**5. CPU sınırlılığı:**
+GPU olmadan 1M step ~90 dakika sürüyor. Yeterli hyperparameter search yapılamadı.
+
+### Neden Double DQN Plain'den çok daha iyi?
+
+Plain DQN Q değerlerini sistematik olarak overestimate ediyor. 169 aksiyonlu bu ortamda bu overestimation çok belirgin — ajan yanlış aksiyonları iyi sanıp tekrar tekrar seçiyor. Double DQN bunu düzeltiyor.
+
+### Neden imitation learning çalışmadı?
+
+Greedy nearest'in kararlarını supervised learning ile öğretmeyi denedik (v5). Ancak cross-entropy loss 1.6'da takıldı — greedy 169 aksiyondan stochastic seçim yapıyor gibi görünüyor (farklı koşullarda farklı aksiyonlar), network bunu öğrenemedi.
+
+---
+
+## A.5 Method Origins
+
+| Method | Paper | Neden Seçildi |
+|--------|-------|---------------|
+| DQN | Mnih et al. (2015) | Temel value-based baseline |
+| Double DQN | Van Hasselt et al. (2016) | Overestimation düzeltmek için |
+| Dueling DQN | Wang et al. (2016) | State value/advantage ayrıştırması |
+
+---
+
+## A.6 Engineering Log
+
+| Deney | Sonuç | Neden |
+|-------|-------|-------|
+| v1: Grid dahil, exp decay | cost=89 (50k) | Grid gürültülü, epsilon çok hızlı düştü |
+| v2: Grid kaldırıldı | cost=19.3 (100k) | İyileşme ama unstable |
+| v3: time_left eklendi | cost=13.4 (100k) | Deadline urgency eklendi |
+| v4: Distance matrix eklendi | cost=11.5 (100k) | Drone-order mesafesi eklendi |
+| v5: Imitation learning | cost=13.8 | Greedy taklit edilemedi |
+| Final: Dueling tuned | cost=9.09 | lr=0.0001, hidden=512 |
+
+
 ## Role B — Policy-based Methods
 **Student:** Begüm Durmuş
 
@@ -158,3 +282,4 @@ DroneControl-v0 çok daha basit bir ortam: 7 boyutlu obs, 2 boyutlu continuous a
 | BC 5000 ep, 100 epoch | cost=5.70 | En iyi sonuç |
 | BC 10000 ep, 200 epoch | cost=8.06 | Overfitting |
 | BC+A2C fine-tune | cost=25+ | A2C modeli bozdu |
+
