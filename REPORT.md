@@ -475,3 +475,67 @@ For completeness, the BC+A2C policy (Role B) serves as the behavioral cloning ba
 
 CQL beats naive offline DQN as expected, but does not beat the behavioral cloning baseline. This is consistent with the literature: when the dataset contains a strong expert policy (Dyna-Q with cost=0.78), CQL can exploit it but the mixed dataset quality limits performance.
 
+---
+---
+
+# TAKIM BİLEŞENİ — Multi-Agent RL (Bölüm 21)
+
+## MA.1 Yöntem — Parametre Paylaşımlı IDQN
+
+Merkezi dağıtıcı (tek karar verici, 169 aksiyon) yerine **merkezi olmayan
+(decentralized)** bir yapı kuruldu: `DroneDispatchMA-v0` ortamında her drone
+kendi ajanıdır. Her ajan 59 boyutlu **yerel** gözlemine bakıp 4 aksiyondan
+birini seçer: accept (sipariş al), move (hedefe git), charge (şarj), stay (bekle).
+
+**IDQN (Independent DQN) + parametre paylaşımı:** Tek bir Q-ağı (MLP 59→128→128→4)
+sekiz ajan tarafından da kullanılır. "Independent" çünkü her ajan kendi başına,
+diğerlerini koordine etmeden karar verir; "parametre paylaşımı" çünkü 8 ayrı ağ
+yerine tek ağ vardır — tüm ajanların deneyimleri ortak bir replay buffer'da
+toplanır ve tek ağı eğitir. Bu, örnek verimliliğini artırır (ağ 8 kat veri görür)
+ve ajanlar arası tutarlılığı korur. Standart DQN bileşenleri kullanıldı: replay
+buffer, hedef ağ (target network), epsilon-greedy keşif.
+
+## MA.2 Sonuçlar
+
+300 episode eğitim, 10 episode değerlendirme. MA ortamı global `cost_per_order`
+döndürmediği için episode başına toplam ödül (8 ajanın toplamı) karşılaştırıldı.
+
+| Politika | Episode toplam ödülü |
+|----------|---------------------|
+| Rastgele baseline | 442.2 ± 144.1 |
+| **Eğitilmiş IDQN** | **1490.0 ± 160.2** |
+
+Eğitilmiş IDQN, rastgele baseline'ı **%237** geçti (≈3.4 kat). Bu, merkezi
+olmayan yapının parametre paylaşımıyla başarıyla öğrendiğini gösterir.
+
+## MA.3 Merkezi vs Merkezi Olmayan Karşılaştırma
+
+İki yaklaşım farklı ortamlarda çalışır (merkezi: `DroneDispatch-v0`, tek karar
+verici; MA: `DroneDispatchMA-v0`, 8 ajan), bu yüzden doğrudan sayısal head-to-head
+yerine kavramsal karşılaştırma yapılır:
+- **Merkezi (Rol C Dyna-Q):** Tüm filoyu gören tek karar verici → global olarak
+  tutarlı, optimuma yakın kararlar (cost 0.78). Ama merkezi darboğaz; ölçeklenmesi
+  ve gerçek-dünya dağıtık dağıtımı zor.
+- **Merkezi olmayan (IDQN):** Her drone bağımsız → ölçeklenebilir, dağıtık,
+  hata-toleranslı. Ama koordinasyon eksikliği ve non-stationarity nedeniyle
+  global tutarlılığı yakalamak zor.
+
+## MA.4 Non-stationarity Tartışması
+
+Multi-agent öğrenmenin temel zorluğu **non-stationarity** (durağan-olmama). Her
+ajan, diğer ajanları çevrenin bir parçası gibi görür. Ancak diğer ajanlar da aynı
+anda öğrenip politikalarını değiştirdiği için, her ajanın karşılaştığı çevre
+**sürekli değişir** — durağan değildir. Bu, ajanın **hareketli bir hedefi**
+kovalamasına yol açar: bugün iyi olan bir strateji, diğerleri değiştiğinde yarın
+kötü olabilir. Sonuç: kararsız öğrenme ve zor yakınsama.
+
+Bu olgu sonuçlarımızda doğrudan gözlendi: eğitim ödülleri episode'lar arasında
+güçlü dalgalanma gösterdi (örn. 270 → 948 → 244), istikrarlı bir yakınsama eğrisi
+yerine. Bu oynaklık, ajanların birbirinin etkin çevresini sürekli değiştirmesinin
+doğrudan belirtisidir.
+
+**Parametre paylaşımının rolü:** 8 ajanın tek ağı paylaşması, ajanlar arası
+farklılığı azaltıp ortak bir politika öğrenerek non-stationarity'yi **kısmen**
+hafifletir — ancak tamamen ortadan kaldırmaz. Tam yakınsama için merkezi-eğitim/
+dağıtık-yürütme (CTDE) gibi yöntemler (örn. QMIX, MADDPG) gerekir; bu, çalışmanın
+doğal bir uzantısıdır.
