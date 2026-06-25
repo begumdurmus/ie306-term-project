@@ -188,7 +188,43 @@ def main():
         print(f"  [SKIP] CQL: {e}")
 
     print_table(results)
+# === JOINT: Multi-agent IDQN (ayri ortam, ayri metrik) ===
+    print("\nEvaluating Multi-agent IDQN (separate env: DroneDispatchMA-v0)...")
+    try:
+        import numpy as _np
+        import gymnasium as gym
+        import drone_dispatch_env
+        ma_env = gym.make("DroneDispatchMA-v0")
+        ma_obs, _ = ma_env.reset(seed=0)
+        ma_agents = list(ma_obs.keys())
+        ma_odim = ma_obs[ma_agents[0]].shape[0]
+        ma_nact = ma_env.action_space[ma_agents[0]].n
+        from ma_idqn_agent import IDQNAgent
+        ma_agent = IDQNAgent(ma_odim, ma_nact, seed=0)
+        ma_agent.load(os.path.join(weight_dir, "ma_idqn.pt"))
 
+        def _ma_run(choose, n_ep=10):
+            tot = []
+            for ep in range(n_ep):
+                o, _ = ma_env.reset(seed=10000 + ep)
+                R = 0.0; done = False
+                while not done:
+                    acts = {ag: choose(o[ag]) for ag in ma_agents}
+                    o, rew, term, trunc, _ = ma_env.step(acts)
+                    done = all(term.values()) or all(trunc.values())
+                    R += sum(rew.values())
+                tot.append(R)
+            return _np.mean(tot), _np.std(tot)
+
+        rng = _np.random.default_rng(0)
+        rnd_m, rnd_s = _ma_run(lambda x: int(rng.integers(ma_nact)))
+        trn_m, trn_s = _ma_run(lambda x: ma_agent.select(x, 0.0))
+        print("  Metric: total reward per episode (MA env has no cost_per_order)")
+        print(f"  Random baseline : {rnd_m:8.1f} +/- {rnd_s:.1f}")
+        print(f"  Trained IDQN    : {trn_m:8.1f} +/- {trn_s:.1f}")
+        print(f"  Improvement     : {(trn_m-rnd_m)/abs(rnd_m)*100:.0f}%")
+    except Exception as e:
+        print(f"  [SKIP] Multi-agent IDQN: {e}")
 
 if __name__ == "__main__":
     main()
