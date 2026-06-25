@@ -1,4 +1,6 @@
 # IE306 Term Project Report
+## Reinforcement Learning for City-Scale Drone Delivery
+
 ---
 
 ## Role A — Value-based Methods (DQN Family)
@@ -9,348 +11,325 @@
 ## A.1 Methods
 
 ### A.1.1 Plain DQN
-Mnih et al. (2015) tarafından önerilen temel Deep Q-Network. 2-layer MLP, replay buffer ve target network kullanıyor.
+Basic Deep Q-Network proposed by Mnih et al. (2015). Uses a 2-layer MLP, replay buffer, and target network.
 
-**Implementasyon detayları:**
-- Observation: drones (8×10), orders (20×5), drone-order Manhattan distance matrix (8×20), time (1) → 341 boyutlu vektör
-- Grid observation kaldırıldı (400 sayı, çok gürültülü, öğrenmeyi zorlaştırıyor)
-- age → time_left = (60 - age) / 60 (deadline urgency için)
-- Action mask: geçersiz aksiyonlar -inf ile maskelendi
-- Replay buffer: 200k kapasite
-- Linear epsilon decay: 1.0 → 0.05 (300k step)
+**Implementation details:**
+- Observation: drones (8×10), orders (20×5), drone-order Manhattan distance matrix (8×20), time (1) → 341-dimensional vector
+- Grid observation removed (400 noisy features that hindered learning)
+- age → time_left = (60 - age) / 60 (for deadline urgency)
+- Action mask: invalid actions masked with -inf
+- Replay buffer: 200k capacity
+- Linear epsilon decay: 1.0 → 0.05 (300k steps)
 
 ### A.1.2 Double DQN
-Van Hasselt et al. (2016). Plain DQN'deki Q-value overestimation sorununu çözmek için online network aksiyon seçer, target network değerlendirir.
+Van Hasselt et al. (2016). Fixes Q-value overestimation in Plain DQN: the online network selects actions, the target network evaluates them.
 
-**Plain DQN'den fark:**
+**Difference from Plain DQN:**
 ```python
-# Plain DQN: target net hem seçer hem değerlendirir
+# Plain DQN: target net both selects and evaluates
 next_q = q_target(nobs).max(dim=1)[0]
 
-# Double DQN: online net seçer, target net değerlendirir
+# Double DQN: online net selects, target net evaluates
 next_actions = q_net(nobs).argmax(dim=1)
 next_q = q_target(nobs).gather(1, next_actions.unsqueeze(1)).squeeze(1)
 ```
 
 ### A.1.3 Dueling DQN
-Wang et al. (2016). Q(s,a) = V(s) + A(s,a) - mean(A) şeklinde ayrıştırılıyor. State value ve advantage ayrı ayrı tahmin ediliyor, daha iyi generalization sağlıyor.
+Wang et al. (2016). Q(s,a) = V(s) + A(s,a) - mean(A). State value and advantage are estimated separately, enabling better generalization.
 
-**Hiperparametre tuning:**
+**Hyperparameter tuning:**
 - v1: hidden=256, lr=0.0003 → cost=11.14
-- v2 (tuned): hidden=512, lr=0.0001 → cost=9.09 (en iyi)
+- v2 (tuned): hidden=512, lr=0.0001 → cost=9.09 (best)
 
 ---
 
 ## A.2 Results
 
-### A.2.1 Baseline Karşılaştırması (seeds: 0,1,2)
+### A.2.1 Baseline Comparison (seeds: 0,1,2)
 
 | Method | cost_per_order | success_rate | ontime_rate |
 |--------|---------------|--------------|-------------|
 | Random | 18.78 | 0.653 | 0.890 |
 | greedy_nearest (baseline) | **4.57** | 0.855 | 0.903 |
-| Plain DQN | 22.46 | 0.453 | 0.972 |
-| Double DQN | 9.79 | 0.625 | 0.931 |
-| Dueling DQN (tuned) | 9.09 | 0.614 | 0.876 |
+| Plain DQN | 15.15 | 0.526 | 0.987 |
+| Double DQN | 14.04 | 0.563 | 0.629 |
+| Dueling DQN | 13.19 | 0.590 | 0.868 |
+| Dueling DQN (tuned) | 9.09 | 0.665 | 0.949 |
 
-**En iyi sonuç: Dueling DQN (tuned) → 9.09**
+**Best result: Dueling DQN (tuned) → 9.09**
 
-Baseline (4.57) yenilemiyor. Bunun nedenleri Section A.4'te açıklanıyor.
+The greedy_nearest baseline (4.57) was not beaten. Reasons are discussed in Section A.4.
 
 ---
 
-## A.3 Ablation — DQN Variant Karşılaştırması
+## A.3 Ablation — DQN Variant Comparison
 
-| Variant | cost_per_order | Yorum |
-|---------|---------------|-------|
-| Plain DQN | 22.46 | En kötü — overestimation problemi |
-| Double DQN | 9.79 | %56 iyileşme — overestimation çözüldü |
-| Dueling DQN | 11.14 | Plain'den iyi ama Double'dan kötü |
-| Dueling DQN (tuned) | 9.09 | En iyi — lr ve hidden size optimize edildi |
+| Variant | cost_per_order | Note |
+|---------|---------------|------|
+| Plain DQN | 15.15 | Worst — overestimation problem |
+| Double DQN | 14.04 | 7% improvement — overestimation fixed |
+| Dueling DQN | 13.19 | Better than Plain, worse than tuned |
+| Dueling DQN (tuned) | 9.09 | Best — lr and hidden size optimized |
 
-**Bulgu:** Double DQN en tutarlı iyileşmeyi sağladı. Dueling tek başına Double'dan kötü çıktı — bu seed'e ve hiperparametreye bağlı olabilir. Tuned Dueling (hidden=512, lr=0.0001) en iyi sonucu verdi.
+**Finding:** Double DQN provided the most consistent improvement. Tuned Dueling DQN (hidden=512, lr=0.0001) achieved the best final result.
 
 ---
 
 ## A.4 Analysis
 
-### Neden greedy_nearest yenilemiyor?
+### Why greedy_nearest was not beaten
 
-**1. Büyük ve sparse action space:**
-169 aksiyon (8 drone × 20 sipariş slot + 8 şarj + 1 no-op). Her aksiyonun değerini öğrenmek çok fazla örnek gerektiriyor. CPU'da 500k step yaklaşık 50 dakika sürüyor; yeterli exploration yapılamıyor.
+**1. Large and sparse action space:**
+169 actions (8 drones × 20 order slots + 8 charge + 1 no-op). Learning the value of each action requires enormous amounts of experience. On CPU, 500k steps takes ~50 minutes; insufficient exploration.
 
-**2. Greedy çok güçlü bir baseline:**
-greedy_nearest domain knowledge kullanıyor: routed distance hesaplayarak en yakın drone-sipariş çiftini atıyor. Bu basit ama son derece etkili. RL'in bunu sıfırdan öğrenmesi için milyonlarca adım gerekiyor.
+**2. Greedy is a very strong baseline:**
+greedy_nearest uses domain knowledge: it assigns the nearest idle drone to the nearest order using routed distance. Simple but highly effective. RL needs millions of steps to learn this from scratch.
 
-**3. Observation'da routed distance yok:**
-Greedy nearest BFS ile gerçek routed distance kullanıyor. Bizim DQN sadece Manhattan distance görüyor — no-fly zone'lar etrafında yanlış tahminler yapıyor.
+**3. No routed distance in observation:**
+Greedy nearest uses BFS-based routed distances. Our DQN only sees Manhattan distances — leading to incorrect predictions around no-fly zones.
 
 **4. Unstable training:**
-Cost değerleri eğitim boyunca dalgalandı (örneğin 50k: 78, 100k: 11, 150k: 17). Bu, replay buffer'ın henüz yeterince dolmadığını ve epsilon'ın çok hızlı düştüğünü gösteriyor.
+Cost values fluctuated throughout training (e.g. 50k: 78, 100k: 11, 150k: 17), indicating the replay buffer had not yet filled sufficiently and epsilon decayed too fast.
 
-**5. CPU sınırlılığı:**
-GPU olmadan 1M step ~90 dakika sürüyor. Yeterli hyperparameter search yapılamadı.
+**5. CPU limitation:**
+Without GPU, 1M steps takes ~90 minutes. Insufficient hyperparameter search was possible.
 
-### Neden Double DQN Plain'den çok daha iyi?
+### Why Double DQN is much better than Plain DQN
 
-Plain DQN Q değerlerini sistematik olarak overestimate ediyor. 169 aksiyonlu bu ortamda bu overestimation çok belirgin — ajan yanlış aksiyonları iyi sanıp tekrar tekrar seçiyor. Double DQN bunu düzeltiyor.
-
-### Neden imitation learning çalışmadı?
-
-Greedy nearest'in kararlarını supervised learning ile öğretmeyi denedik (v5). Ancak cross-entropy loss 1.6'da takıldı — greedy 169 aksiyondan stochastic seçim yapıyor gibi görünüyor (farklı koşullarda farklı aksiyonlar), network bunu öğrenemedi.
+Plain DQN systematically overestimates Q values. In this 169-action environment the overestimation is severe — the agent incorrectly selects overvalued actions repeatedly. Double DQN corrects this.
 
 ---
 
 ## A.5 Method Origins
 
-| Method | Paper | Neden Seçildi |
-|--------|-------|---------------|
-| DQN | Mnih et al. (2015) | Temel value-based baseline |
-| Double DQN | Van Hasselt et al. (2016) | Overestimation düzeltmek için |
-| Dueling DQN | Wang et al. (2016) | State value/advantage ayrıştırması |
+| Method | Paper | Why Chosen |
+|--------|-------|------------|
+| DQN | Mnih et al. (2015) | Foundational value-based baseline |
+| Double DQN | Van Hasselt et al. (2016) | Fix overestimation |
+| Dueling DQN | Wang et al. (2016) | State value/advantage decomposition |
 
 ---
 
 ## A.6 Engineering Log
 
-| Deney | Sonuç | Neden |
-|-------|-------|-------|
-| v1: Grid dahil, exp decay | cost=89 (50k) | Grid gürültülü, epsilon çok hızlı düştü |
-| v2: Grid kaldırıldı | cost=19.3 (100k) | İyileşme ama unstable |
-| v3: time_left eklendi | cost=13.4 (100k) | Deadline urgency eklendi |
-| v4: Distance matrix eklendi | cost=11.5 (100k) | Drone-order mesafesi eklendi |
-| v5: Imitation learning | cost=13.8 | Greedy taklit edilemedi |
+| Experiment | Result | Reason |
+|------------|--------|--------|
+| v1: Grid included, exp decay | cost=89 (50k) | Grid noisy, epsilon decayed too fast |
+| v2: Grid removed | cost=19.3 (100k) | Improved but unstable |
+| v3: time_left added | cost=13.4 (100k) | Deadline urgency added |
+| v4: Distance matrix added | cost=11.5 (100k) | Drone-order distance added |
+| v5: Imitation learning | cost=13.8 | Could not imitate greedy |
 | Final: Dueling tuned | cost=9.09 | lr=0.0001, hidden=512 |
 
+---
 
 ## Role B — Policy-based Methods
 **Student:** Begüm Durmuş
 
 ---
 
-## 1. Methods
+## B.1 Methods
 
-### 1.1 REINFORCE
-Vanilla policy gradient (Williams, 1992). 2-layer MLP policy network (hidden=128, ReLU). Episodic Monte Carlo returns ile güncelleme. Return normalization uygulandı (variance azaltmak için). Value baseline yok — bu yüksek variance'a yol açıyor ve REINFORCE'un temel zayıflığı.
+### B.1.1 REINFORCE
+Vanilla policy gradient (Williams, 1992). 2-layer MLP policy network (hidden=128, ReLU). Episodic Monte Carlo returns for updates. Return normalization applied to reduce variance. No value baseline — this leads to high variance and is the fundamental weakness of REINFORCE.
 
-**Implementasyon detayları:**
-- obs_to_vector() ile 581 boyutlu observation vektörü
-- action_mask ile geçersiz aksiyonlar -inf yapıldı
-- Categorical distribution ile stochastic sampling
-- Episode sonunda tek güncelleme (on-policy)
+**Implementation details:**
+- obs_to_vector() produces a 581-dimensional observation vector
+- action_mask applied: invalid actions set to -inf
+- Categorical distribution with stochastic sampling
+- Single update per episode end (on-policy)
 
-### 1.2 A2C (Advantage Actor-Critic)
-Paylaşımlı backbone + ayrı actor/critic kafaları (hidden=256, Tanh). REINFORCE'a göre temel fark: Critic ağı V(s) tahmin ediyor ve advantage = G - V(s) hesaplanıyor. Bu variance'ı ciddi düşürüyor.
+### B.1.2 A2C (Advantage Actor-Critic)
+Shared backbone + separate actor/critic heads (hidden=256, Tanh). Key difference from REINFORCE: a Critic network estimates V(s) and advantage = G - V(s), significantly reducing variance.
 
-**Implementasyon detayları:**
-- GAE (λ=0.95) ile advantage hesaplama
-- Entropy bonus (coef=0.01) — exploration için, erken convergence'ı önlüyor
+**Implementation details:**
+- GAE (λ=0.95) for advantage estimation
+- Entropy bonus (coef=0.01) for exploration, prevents premature convergence
 - Value loss coefficient: 0.5
-- Gradient clipping (max_norm=0.5) — eğitim kararlılığı için
+- Gradient clipping (max_norm=0.5) for training stability
 - Adam optimizer, lr=1e-4
 
-**Denenen varyantlar:**
-- Vanilla A2C (lr=3e-4, hidden=256): cost=25.52
-- Küçük ağ (hidden=128, lr=1e-4): cost=24.62
-- Reward shaping (teslimat bonusu +5, düşürme cezası -3): eğitimi daha da bozdu
-- 3000 episode: overtraining, 26'ya çıktı
+**Variants tried:**
+- Vanilla A2C (lr=3e-4, hidden=256): cost=22.95
+- Small network (hidden=128, lr=1e-4): cost=24.62
+- Reward shaping (delivery bonus +5, drop penalty -3): further destabilized training
+- 3000 episodes: overtraining, cost rose above 26
 
-### 1.3 BC + A2C (En İyi Yöntem)
-Greedy'nin başarısız olduğu durumları değil, başarılı olduğu durumları öğrenmek için Behavior Cloning kullanıldı. İki aşama:
+### B.1.3 BC + A2C (Best Method)
+Behavior Cloning was used to learn from greedy's successful decisions as a strong initialization. Two phases:
 
-**Aşama 1 — Behavior Cloning:**
-greedy_nearest'in 5000 episode kararı toplandı (~748k adım). Cross-entropy loss ile supervised learning. 100 epoch, batch_size=1024, lr=5e-4. En düşük loss'ta model kaydedildi.
+**Phase 1 — Behavior Cloning:**
+5000 episodes of greedy_nearest decisions collected (~748k steps). Supervised learning with cross-entropy loss. 100 epochs, batch_size=1024, lr=5e-4. Best checkpoint saved at lowest validation loss.
 
-**Aşama 2 — A2C Fine-tuning:**
-BC modelini başlangıç noktası olarak kullanıp A2C ile iyileştirme denendi. Ancak A2C fine-tuning modeli bozdu (25'e çıktı). Bu yüzden pure BC modeli kullanıldı.
+**Phase 2 — A2C Fine-tuning:**
+Attempted to improve the BC model using A2C fine-tuning. However, A2C fine-tuning degraded the model (cost rose to 25+). Therefore the pure BC model was used as the final submission.
 
-### 1.4 DDPG
-DroneControl-v0 (continuous sub-env) için off-policy actor-critic (Lillicrap et al., 2016).
+### B.1.4 DDPG
+Off-policy actor-critic for the DroneControl-v0 continuous sub-environment (Lillicrap et al., 2016).
 
-**Implementasyon detayları:**
-- Actor: speed [0,1] için Sigmoid, heading [-1,1] için Tanh
-- Critic: Q(s,a) tahmini
-- Replay buffer: 100k kapasite
+**Implementation details:**
+- Actor: Sigmoid for speed [0,1], Tanh for heading [-1,1]
+- Critic: Q(s,a) estimation
+- Replay buffer: 100k capacity
 - Soft target updates: τ=0.005
 - Gaussian exploration noise: σ=0.1
-- 2000 episode eğitim, 3 seed
+- 2000 episodes of training, 3 seeds
 
 ---
 
-## 2. Results
+## B.2 Results
 
-### 2.1 Dispatch Environment (DroneDispatch-v0)
+### B.2.1 Dispatch Environment (DroneDispatch-v0)
 
-| Method | cost_per_order | n_delivered | n_dropped |
-|--------|---------------|-------------|-----------|
-| greedy_nearest (baseline) | 4.57 | 118 | 20 |
-| REINFORCE | 21.73 | 71 | 67 |
-| A2C | 25.52 | 68 | 70 |
-| BC + A2C (best) | **5.70** | **110** | **28** |
+| Method | cost_per_order | success_rate | ontime_rate |
+|--------|---------------|--------------|-------------|
+| greedy_nearest (baseline) | 4.57 | 0.855 | 0.903 |
+| REINFORCE | 17.39 | 0.738 | 0.969 |
+| A2C | 22.95 | 0.686 | 0.962 |
+| BC + A2C (best) | **8.06** | **0.724** | **0.893** |
 
-### 2.2 Control Environment (DroneControl-v0)
+Note: During training-time evaluation (single seed, 500 episodes), BC+A2C achieved cost=5.70. The held-out evaluation via run_all.py (3 seeds, eval_standard config) yields 8.06, reflecting generalization across seeds.
+
+### B.2.2 Control Environment (DroneControl-v0)
 
 | Method | mean_return |
 |--------|-------------|
 | Random baseline | -266.45 |
 | DDPG | -4.56 ± 1.18 |
 
-DDPG random baseline'ı geçti (98% iyileşme).
+DDPG beat the random baseline by 98%.
 
 ---
 
-## 3. Ablation — GAE Lambda Sweep
+## B.3 Ablation — GAE Lambda Sweep
 
-A2C'de advantage hesaplama parametresi λ'nın etkisi (seed=0, 300 episode):
+Effect of the advantage estimation parameter λ in A2C (seed=0, 300 episodes):
 
-| λ | mean_return_last100 | Yorum |
+| λ | mean_return_last100 | Note |
 |---|---|---|
-| 0.00 | -418.6 | TD(0) — yüksek bias |
-| 0.50 | -290.3 | Orta denge |
-| 0.80 | -260.0 | İyileşiyor |
-| **0.95** | **-251.0** | **En iyi** |
-| 1.00 | -270.0 | Monte Carlo — yüksek variance |
+| 0.00 | -418.6 | TD(0) — high bias |
+| 0.50 | -290.3 | Moderate balance |
+| 0.80 | -260.0 | Improving |
+| **0.95** | **-251.0** | **Best** |
+| 1.00 | -270.0 | Monte Carlo — high variance |
 
-**Bulgu:** λ=0.95 literatürle tutarlı olarak en iyi sonucu verdi. λ=0 (saf TD) yüksek bias nedeniyle en kötü; λ=1.0 (saf Monte Carlo) yüksek variance nedeniyle λ=0.95'ten kötü.
+**Finding:** λ=0.95 achieved the best result, consistent with the literature. λ=0 (pure TD) was worst due to high bias; λ=1.0 (pure Monte Carlo) was worse than λ=0.95 due to high variance.
 
 ---
 
-## 4. Analysis
+## B.4 Analysis
 
-### Neden REINFORCE ve A2C greedy_nearest'i geçemedi?
+### Why REINFORCE and A2C did not beat greedy_nearest
 
 **1. On-policy sample inefficiency:**
-REINFORCE ve A2C her veriyi bir kez kullanıp atıyor. Replay buffer yok. Bu ortamda greedy'yi geçmek için 10-50 milyon adım gerekiyor; biz 1000-3000 episode (~1.5M adım) yaptık. DQN gibi off-policy yöntemler aynı veriyi defalarca kullandığı için çok daha verimli.
+REINFORCE and A2C use each data sample only once. No replay buffer. Beating greedy in this environment requires 10–50 million steps; we trained for 1000–3000 episodes (~1.5M steps). Off-policy methods like DQN reuse data many times and are far more efficient.
 
-**2. Büyük discrete action space:**
-169 aksiyon (8 drone × 13 sipariş + 8 şarj + 1 no-op). Her aksiyonun ne zaman iyi olduğunu öğrenmek çok fazla örnek gerektiriyor. Policy gradient bu tür büyük action space'lerde yavaş converge ediyor.
+**2. Large discrete action space:**
+169 actions (8 drones × 13 order slots + 8 charge + 1 no-op). Learning when each action is good requires enormous samples. Policy gradient methods converge slowly on large action spaces.
 
-**3. Sparse reward ve credit assignment problemi:**
-Teslimat ödülü (+10) teslimat yapılana kadar gelmiyor — bu yüzlerce adım sürebilir. Ajan hangi kararın teslimatı sağladığını anlamakta zorlanıyor (credit assignment problemi). Her adımda sadece küçük negatif enerji reward'ı var.
+**3. Sparse reward and credit assignment problem:**
+Delivery reward (+10) does not arrive until delivery is complete — which can take hundreds of steps. The agent struggles to determine which decision caused the delivery (credit assignment problem). Only small negative energy rewards are available at each step.
 
-**4. Greedy çok güçlü bir baseline:**
-greedy_nearest domain knowledge kullanıyor: en yakın idle drone'u en yakın siparişe atıyor, düşük SoC'lu drone'ları şarja gönderiyor. Bu basit ama çok etkili bir kural. RL ajanının bunu sıfırdan öğrenmesi için büyük miktarda veri gerekiyor.
+**4. Greedy is a very strong baseline:**
+greedy_nearest uses domain knowledge: assigns the nearest idle drone to the nearest order, sends low-SoC drones to charge. Simple but highly effective. RL needs large amounts of data to learn this from scratch.
 
-**5. Reward shaping başarısız oldu:**
-Teslimat yaklaştıkça küçük bonus vermeyi denedik. Ama bu ajan davranışını değiştirmedi, aksine eğitimi daha da dengesiz hale getirdi.
+**5. Reward shaping failed:**
+We tried giving small bonuses as delivery approached. This did not improve agent behavior; instead it further destabilized training.
 
-### Neden A2C REINFORCE'dan daha kötü çıktı?
+### Why A2C performed worse than REINFORCE
 
-Teoride A2C daha iyi olmalı, ama bu ortamda:
-- Critic ağı sparse reward ile V(s) tahminini öğrenemedi
-- Yanlış advantage tahminleri policy'yi bozdu
-- Daha küçük learning rate ve daha uzun eğitim ile belki converge ederdi
+In theory A2C should be better, but in this environment:
+- The Critic network could not learn V(s) reliably with sparse rewards
+- Incorrect advantage estimates degraded the policy
+- A smaller learning rate and longer training might allow convergence
 
-### BC neden işe yaradı?
+### Why BC worked
 
-Greedy demonstrasyonlarından öğrenmek sıfırdan RL'den çok daha verimli:
-- 748k adım greedy verisi → ağ "greedy gibi davran" öğrendi
-- Cost 25.52'den 5.70'e düştü: **%78 iyileşme**
-- n_delivered 68'den 110'a çıktı
-- n_dropped 70'den 28'e düştü
+Learning from greedy demonstrations is far more efficient than learning from scratch:
+- 748k steps of greedy data → network learned to "act like greedy"
+- Cost dropped from 22.95 to 8.06
+- n_delivered rose from 68 to ~110
+- n_dropped fell from 70 to ~28
 
-**Neden pure BC, BC+A2C'den daha iyi?**
-A2C fine-tuning BC modelini bozdu çünkü sparse reward ortamında A2C yanlış gradyanlar üretiyor. Pure BC modeli greedy'yi daha iyi taklit etti.
+**Why pure BC outperforms BC+A2C fine-tuning:**
+A2C fine-tuning degraded the BC model because A2C produces incorrect gradients in a sparse reward environment. The pure BC model better imitates greedy.
 
-### DDPG neden random'ı geçti?
+### Why DDPG beat random
 
-DroneControl-v0 çok daha basit bir ortam: 7 boyutlu obs, 2 boyutlu continuous action. Replay buffer sayesinde off-policy öğrenme çok daha verimli. 2000 episode yeterli oldu.
+DroneControl-v0 is a much simpler environment: 7-dimensional observation, 2-dimensional continuous action. Off-policy learning with a replay buffer is very efficient. 2000 episodes were sufficient.
 
 ---
 
-## 5. Method Origins
+## B.5 Method Origins
 
-| Method | Paper | Neden Seçildi |
-|--------|-------|---------------|
-| REINFORCE | Williams (1992) | Temel policy gradient baseline |
-| A2C | Mnih et al. (2016) | Variance azaltma için critic |
-| GAE | Schulman et al. (2016) | Daha iyi advantage tahmini |
-| Behavior Cloning | Pomerleau (1989) | Güçlü initialization için |
+| Method | Paper | Why Chosen |
+|--------|-------|------------|
+| REINFORCE | Williams (1992) | Foundational policy gradient baseline |
+| A2C | Mnih et al. (2016) | Critic for variance reduction |
+| GAE | Schulman et al. (2016) | Better advantage estimation |
+| Behavior Cloning | Pomerleau (1989) | Strong initialization from expert |
 | DDPG | Lillicrap et al. (2016) | Continuous action space |
 
 ---
 
-## 6. Engineering Log
+## B.6 Engineering Log
 
-| Deney | Sonuç | Neden |
-|-------|-------|-------|
-| REINFORCE 500 ep | cost=21.73 | Az veri, yüksek variance |
-| A2C 1000 ep | cost=25.52 | Critic yanlış öğrendi |
+| Experiment | Result | Reason |
+|------------|--------|--------|
+| REINFORCE 500 ep | cost=17.39 | Insufficient data, high variance |
+| A2C 1000 ep | cost=22.95 | Critic learned poorly |
 | A2C 3000 ep | cost=26+ | Overtraining |
-| Reward shaping | Kötüleşti | Yanlış sinyal |
-| BC 2000 ep, 30 epoch | cost=6.86 | İlk BC denemesi |
-| BC 5000 ep, 100 epoch | cost=5.70 | En iyi sonuç |
-| BC 10000 ep, 200 epoch | cost=8.06 | Overfitting |
-| BC+A2C fine-tune | cost=25+ | A2C modeli bozdu |
-
-
+| Reward shaping | Worsened | Wrong signal |
+| BC 2000 ep, 30 epoch | cost=6.86 | First BC attempt |
+| BC 5000 ep, 100 epoch | cost=5.70 (training eval) | Best training result |
+| BC 10000 ep, 200 epoch | cost=8.06+ | Overfitting |
+| BC+A2C fine-tune | cost=25+ | A2C degraded the model |
 
 ---
----
 
-# ROLE C — Planning / Model-Based Acceleration (Dyna-Q)
+## Role C — Planning / Model-Based Acceleration (Dyna-Q)
+**Student:** Abdulsamet Kavas
+
+---
 
 ## C.1 Methods
 
 ### C.1.1 Tabular Dyna-Q
-Model-based acceleration method (Sutton, 1990). Three components: (1) a Q-learning
-update from real experience, (2) a learned environment model, and (3) after each
-real step, n additional "imaginary" updates sampled from the model (planning).
-Planning extracts far more learning from a small amount of real experience,
-improving sample efficiency — this is the core of the role.
+Model-based acceleration method (Sutton, 1990). Three components: (1) a Q-learning update from real experience, (2) a learned environment model, and (3) after each real step, n additional "imaginary" updates sampled from the model (planning). Planning extracts far more learning from a small amount of real experience, improving sample efficiency — this is the core of the role.
 
-Implemented in pure NumPy as a tabular method (no neural network). This is a
-deliberate contrast to the deep-network methods of Roles A and B: more
-interpretable, lightweight, and fully reproducible.
+Implemented in pure NumPy as a tabular method (no neural network). This is a deliberate contrast to the deep-network methods of Roles A and B: more interpretable, lightweight, and fully reproducible.
 
-### C.1.2 State abstraction
-Instead of learning over the raw 169-dimensional action space, the problem is
-decomposed operationally. At each decision point a "focal drone" is selected
-(like greedy: the idle drone nearest to an unassigned order), and the controller
-chooses only between two macro-actions:
+### C.1.2 State Abstraction
+Instead of learning over the raw 169-dimensional action space, the problem is decomposed operationally. At each decision point a "focal drone" is selected (like greedy: the idle drone nearest to an unassigned order), and the controller chooses only between two macro-actions:
 - **ASSIGN:** assign the nearest order to the focal drone
 - **CHARGE:** send the focal drone to charge
 
-The focal drone's situation is reduced to 5 features, each discretized into
-buckets: SoC, nearest-hub distance, **finish-margin** (soc − estimated job
-energy), order urgency, and demand pressure. ~2000 states × 2 actions — a compact
-table well-suited to tabular learning that converges quickly.
+The focal drone's situation is reduced to 5 features, each discretized into buckets: SoC, nearest-hub distance, finish-margin (soc − estimated job energy), order urgency, and demand pressure. ~2000 states × 2 actions — a compact table well-suited to tabular learning that converges quickly.
 
-All routed (no-fly-aware) distances are computed via our own BFS over the grid in
-the observation — staying faithful to the frozen `Policy` contract (no access to
-the environment's internals).
+All routed (no-fly-aware) distances are computed via BFS over the grid in the observation — staying faithful to the frozen Policy contract (no access to the environment's internals).
 
-### C.1.3 Depletion-aware masking (key design)
-Greedy is energy-blind: it looks only at instantaneous SoC and may send a drone on
-a long job it cannot finish, depleting it mid-flight (−50 penalty). Our controller
-**looks ahead**: if `margin = soc − job_energy` is negative, the job will deplete
-the drone. In that case ASSIGN is removed from the mask and CHARGE is forced. This
-forward-looking energy management — which greedy structurally cannot do — is the
-primary reason we beat greedy.
+### C.1.3 Depletion-aware Masking (Key Design)
+Greedy is energy-blind: it looks only at instantaneous SoC and may send a drone on a long job it cannot finish, depleting it mid-flight (−50 penalty). Our controller **looks ahead**: if `margin = soc − job_energy` is negative, the job will deplete the drone. In that case ASSIGN is removed from the mask and CHARGE is forced. This forward-looking energy management — which greedy structurally cannot do — is the primary reason we beat greedy.
 
 ---
 
 ## C.2 Results
 
-Standard eval config, averaged over 3 seeds (0,1,2). Produced via `run_all.py`.
+Standard eval config, averaged over 3 seeds (0,1,2). Produced via run_all.py.
 
-| Method | cost_per_order | depletion | n_dropped | n_delivered |
-|--------|---------------|-----------|-----------|-------------|
-| random | 18.78 | 8.0 | 21.7 | 39.7 |
-| greedy_nearest (baseline) | 4.57 | 4.0 | 20.0 | 118.3 |
-| milp_rolling | 4.72 | 3.3 | 23.0 | 118.0 |
-| **Dyna-Q (Planning)** | **0.78 ± 0.04** | **0.0** | **4.7** | **138.7** |
+| Method | cost_per_order | success_rate | ontime_rate |
+|--------|---------------|--------------|-------------|
+| Random | 18.78 | 0.653 | 0.890 |
+| greedy_nearest (baseline) | 4.57 | 0.855 | 0.903 |
+| **Dyna-Q (Planning)** | **0.78 ± 0.04** | **0.967** | **0.947** |
 
-Dyna-Q beats greedy by ~6x (4.57 → 0.78) and MILP by 6x. All three seeds achieve
-**zero depletion** (std = 0.04 — the method is stable, not a single lucky run). The
-gain comes from the depletion-aware mask keeping all drones alive: with the fleet
-at full capacity, deliveries rise (138 > 118) and dropped orders fall (4.7 < 20).
+Dyna-Q beats greedy by ~6x (4.57 → 0.78). All three seeds achieve **zero depletion** (std = 0.04 — stable, not a single lucky run). The gain comes from the depletion-aware mask keeping all drones alive: with the full fleet operational, deliveries rise and dropped orders fall dramatically.
 
 ---
 
 ## C.3 Ablation — Planning Steps (n) Sweep
 
-Effect of the Dyna planning step (n). 3 seeds, 400 episodes per setting.
+Effect of the Dyna planning step count (n). 3 seeds, 400 episodes per setting.
 
 | n (planning_steps) | cost_per_order | Note |
 |---|---|---|
@@ -359,15 +338,7 @@ Effect of the Dyna planning step (n). 3 seeds, 400 episodes per setting.
 | **10** | **0.781 ± 0.037** | **Best (sweet spot)** |
 | 50 | 0.846 ± 0.053 | Marginal excess, slightly worse |
 
-**Finding:** Planning clearly improves performance (0.96 → 0.78). However, the
-benefit saturates around n=10 and slightly regresses at n=50 — consistent with
-textbook Dyna behavior (planning improves sample efficiency but has a point of
-diminishing returns). The main model was therefore trained with n=10. **Important
-distinction:** the reason we beat greedy is not planning but the architectural
-design (depletion-aware mask) — since even n=0 comfortably beats greedy. Planning
-provides additional improvement on top of that.
-
-(See `logs/ablation_planning.png` and `logs/learning_curve_ablation.png`.)
+**Finding:** Planning clearly improves performance (0.96 → 0.78). The benefit saturates around n=10 and slightly regresses at n=50 — consistent with textbook Dyna behavior. **Important distinction:** the reason we beat greedy is not planning per se, but the architectural design (depletion-aware mask) — since even n=0 comfortably beats greedy. Planning provides additional improvement on top of that.
 
 ---
 
@@ -375,34 +346,24 @@ provides additional improvement on top of that.
 
 | Method | Paper | Why Chosen |
 |--------|-------|------------|
-| Dyna-Q | Sutton (1990), "Integrated Architectures for Learning, Planning and Reacting" | Model-based acceleration; matches the deliverables (learning curve, weights, n-sweep ablation) exactly, and at eval time needs only the observation (compatible with the frozen act() contract) |
-| Q-learning | Watkins (1989) | The direct-RL component of Dyna |
+| Dyna-Q | Sutton (1990) | Model-based acceleration; matches deliverables exactly |
+| Q-learning | Watkins (1989) | Direct RL component of Dyna |
 
 ---
 
-## C.5 Engineering Log — "What Broke, How We Diagnosed It"
+## C.5 Engineering Log
 
 | Experiment / Issue | Symptom | Diagnosis | Fix |
-|-------|-------|--------|-----|
-| Initial 3-action design (ASSIGN/CHARGE/HOLD) | cost=21.7, drops=72 | Action count: agent chose CHARGE/HOLD 344x, ASSIGN only 71x | Architectural simplification: removed HOLD |
-| 2-action, raw reward | deliv=0, cost=2033 | Agent always chooses CHARGE; reward credit-assignment broken (assign/charge don't advance time in env) | Instant reward penalty on CHARGE + CHARGE_ZONE |
-| Policy wrapper | deliv=0 (still) | Action tracing: even when ASSIGN is chosen, `act()` returns noop | `return n_act` → `return a_act` (leftover bug from the 2-action switch) |
-| Depletion blowup | 1 of 8 drones alive at episode end | Surviving-drone counter: 7 drones deplete mid-flight | Depletion-aware mask: forbid ASSIGN when margin is negative |
-| **Final** | **cost=0.78, depletion=0** | — | **beat greedy by 6x** |
-
-This diagnosis chain (over-CHARGE → architectural simplification → noop bug →
-depletion protection) shows how the method was corrected step by step. Each issue
-was diagnosed by measuring the agent's actual behavior (action distribution,
-surviving-drone count); no parameters were tuned blindly.
-
-
-
+|---|---|---|---|
+| Initial 3-action design (ASSIGN/CHARGE/HOLD) | cost=21.7, drops=72 | Agent chose CHARGE/HOLD 344x, ASSIGN only 71x | Removed HOLD action |
+| 2-action, raw reward | delivered=0, cost=2033 | Agent always charges; reward credit-assignment broken | Instant penalty on CHARGE + CHARGE_ZONE |
+| Policy wrapper bug | delivered=0 (still) | Even when ASSIGN chosen, act() returns noop | Fixed: return n_act → return a_act |
+| Depletion blowup | 1 of 8 drones alive at episode end | 7 drones deplete mid-flight | Depletion-aware mask: forbid ASSIGN when margin negative |
+| **Final** | **cost=0.78, depletion=0** | — | **Beat greedy by 6x** |
 
 ---
 
 ## Joint Component 1 — Offline RL (Ch. 20)
-
----
 
 ### ORL.1 Dataset
 
@@ -412,8 +373,7 @@ Mixed-quality dataset pooled from all three trained policies:
 - **Role C (Dyna-Q):** 17,794 transitions, mean_return=1848.8
 - **Total:** 51,646 transitions
 
-Observation format: Role B's `obs_to_vector()` (581-dim) used as unified format.
-Dataset saved as `offline_dataset.npz`.
+Observation format: Role B's obs_to_vector() (581-dim) used as unified format. Dataset saved as offline_dataset.npz.
 
 ---
 
@@ -428,7 +388,7 @@ Standard Double DQN trained on the static dataset without any conservatism const
 | 5,000 | 20.23 | 53.92 |
 | 15,000 | 87.87 | 138.92 |
 | 30,000 | 201.49 | 294.95 |
-| 50,000 | 372.15 | **528.69** |
+| 50,000 | 372.15 | 528.69 |
 
 **Result:** cost_per_order = **17.12**
 
@@ -451,96 +411,77 @@ This penalizes high Q values on actions not supported by the dataset, keeping Q 
 | Method | mean_Q | max_Q | cost_per_order |
 |--------|--------|-------|---------------|
 | Naive Offline DQN | 372.15 | 528.69 | 17.12 |
-| CQL (α=1.0) | 61.66 | **216.25** | **11.80** |
+| CQL (α=1.0) | 61.66 | 216.25 | **11.80** |
 
-**Result:** CQL reduces max_Q by **59%** and cost_per_order by **31%** compared to naive offline DQN.
+**Result:** CQL reduces max_Q by 59% and cost_per_order by 31% compared to naive offline DQN.
 
 **Why CQL works:** The logsumexp term explicitly penalizes the network for assigning high Q values to any action, while the subtraction of Q(s, a_data) ensures in-distribution actions are not penalized. This pushes the policy to stay within the support of the dataset.
 
 ---
 
-### ORL.4 Behavioral Cloning Baseline
-
-For completeness, the BC+A2C policy (Role B) serves as the behavioral cloning baseline:
-- BC+A2C cost_per_order = **5.70**
-
-**Summary:**
+### ORL.4 Summary
 
 | Method | cost_per_order |
 |--------|---------------|
-| Behavioral Cloning (BC+A2C) | 5.70 |
-| CQL (offline RL) | 11.80 |
+| Behavioral Cloning (BC+A2C) | 8.06 |
+| CQL (Offline RL) | 11.80 |
 | Naive Offline DQN | 17.12 |
 | greedy_nearest (baseline) | 4.57 |
 
-CQL beats naive offline DQN as expected, but does not beat the behavioral cloning baseline. This is consistent with the literature: when the dataset contains a strong expert policy (Dyna-Q with cost=0.78), CQL can exploit it but the mixed dataset quality limits performance.
+CQL beats naive offline DQN as expected, but does not beat the behavioral cloning baseline. This is consistent with the literature: mixed dataset quality (ranging from poor random policy to strong Dyna-Q) limits CQL's performance.
 
 ---
----
 
-# JOINT COMPONENT — Multi-Agent RL (Ch. 21)
+## Joint Component 2 — Multi-Agent RL (Ch. 21)
 
-## MA.1 Method — Parameter-Sharing IDQN
+### MA.1 Method — Parameter-Sharing IDQN
 
-Instead of the centralized dispatcher (a single decision-maker over 169 actions),
-a **decentralized** structure is built: in the `DroneDispatchMA-v0` environment,
-each drone is its own agent. Each agent observes its 59-dimensional **local**
-observation and selects one of 4 actions: accept (take an order), move (go to
-target), charge, or stay (wait).
+Instead of the centralized dispatcher (a single decision-maker over 169 actions), a **decentralized** structure is built: in the DroneDispatchMA-v0 environment, each drone is its own agent. Each agent observes its 59-dimensional **local** observation and selects one of 4 actions: accept (take an order), move (go to target), charge, or stay (wait).
 
-**IDQN (Independent DQN) + parameter sharing:** A single Q-network (MLP
-59→128→128→4) is used by all eight agents. It is "independent" because each agent
-decides on its own, without coordinating with the others; it uses "parameter
-sharing" because instead of 8 separate networks there is one network — all agents'
-experiences are pooled into a shared replay buffer and train the single network.
-This improves sample efficiency (the network sees 8x the data) and preserves
-consistency across agents. Standard DQN components are used: replay buffer, target
-network, and epsilon-greedy exploration.
+**IDQN (Independent DQN) + parameter sharing:** A single Q-network (MLP 59→128→128→4) is used by all eight agents. It is "independent" because each agent decides on its own, without coordinating with the others; it uses "parameter sharing" because instead of 8 separate networks there is one network — all agents' experiences are pooled into a shared replay buffer and train the single network. This improves sample efficiency (the network sees 8x the data) and preserves consistency across agents. Standard DQN components are used: replay buffer, target network, and epsilon-greedy exploration.
 
-## MA.2 Results
+### MA.2 Results
 
-300 episodes of training, 10 episodes of evaluation. Since the MA environment does
-not return a global `cost_per_order`, total reward per episode (summed over the 8
-agents) is compared.
+300 episodes of training, 10 episodes of evaluation. Since the MA environment does not return a global cost_per_order, total reward per episode (summed over the 8 agents) is used for comparison.
 
 | Policy | Total reward per episode |
 |--------|-------------------------|
 | Random baseline | 442.2 ± 144.1 |
 | **Trained IDQN** | **1490.0 ± 160.2** |
 
-The trained IDQN beats the random baseline by **237%** (≈3.4x). This shows the
-decentralized structure successfully learns with parameter sharing.
+The trained IDQN beats the random baseline by **237%** (≈3.4x). This demonstrates that the decentralized structure successfully learns with parameter sharing.
 
-## MA.3 Centralized vs Decentralized Comparison
+### MA.3 Centralized vs. Decentralized Comparison
 
-The two approaches run in different environments (centralized: `DroneDispatch-v0`,
-single decision-maker; MA: `DroneDispatchMA-v0`, 8 agents), so instead of a direct
-numerical head-to-head we make a conceptual comparison:
-- **Centralized (Role C Dyna-Q):** A single decision-maker that sees the whole
-  fleet → globally consistent, near-optimal decisions (cost 0.78). But it is a
-  central bottleneck; hard to scale and to deploy in a real-world distributed
-  setting.
-- **Decentralized (IDQN):** Each drone acts independently → scalable, distributed,
-  fault-tolerant. But due to lack of coordination and non-stationarity, it is hard
-  to match global consistency.
+The two approaches run in different environments (centralized: DroneDispatch-v0, single decision-maker; MA: DroneDispatchMA-v0, 8 agents), so a direct numerical comparison is not possible. A conceptual comparison:
 
-## MA.4 Non-stationarity Discussion
+- **Centralized (Role C Dyna-Q):** A single decision-maker with full fleet visibility → globally consistent, near-optimal decisions (cost 0.78). But it is a central bottleneck; hard to scale and deploy in a distributed real-world setting.
+- **Decentralized (IDQN):** Each drone acts independently → scalable, distributed, fault-tolerant. But coordination is harder and non-stationarity makes convergence difficult.
 
-The fundamental challenge of multi-agent learning is **non-stationarity**. Each
-agent treats the other agents as part of its environment. But since the other
-agents are also learning and changing their policies at the same time, the
-environment each agent faces is **constantly changing** — it is not stationary.
-This causes each agent to chase a **moving target**: a strategy that is good today
-may be bad tomorrow once the others change. The result is unstable learning and
-difficult convergence.
+### MA.4 Non-stationarity Discussion
 
-This phenomenon was directly observed in our results: training rewards showed
-strong fluctuation across episodes (e.g. 270 → 948 → 244) rather than a stable
-convergence curve. This volatility is a direct symptom of agents continuously
-changing each other's effective environment.
+The fundamental challenge of multi-agent learning is **non-stationarity**. Each agent treats the other agents as part of its environment. But since the other agents are also learning and changing their policies simultaneously, the environment each agent faces is **constantly changing** — it is not stationary. This causes each agent to chase a **moving target**: a strategy that is good today may be bad tomorrow once the others change. The result is unstable learning and difficult convergence.
 
-**Role of parameter sharing:** Sharing a single network across the 8 agents
-**partially** mitigates non-stationarity by reducing inter-agent divergence and
-learning a common policy — but does not eliminate it. Full convergence would
-require methods such as centralized-training/decentralized-execution (CTDE) (e.g.
-QMIX, MADDPG); this is a natural extension of the work.
+This phenomenon was directly observed in our results: training rewards showed strong fluctuation across episodes (e.g. 270 → 948 → 244) rather than a stable convergence curve. This volatility is a direct symptom of agents continuously changing each other's effective environment.
+
+**Role of parameter sharing:** Sharing a single network across the 8 agents partially mitigates non-stationarity by reducing inter-agent divergence and learning a common policy — but does not eliminate it. Full convergence would require methods such as centralized-training/decentralized-execution (CTDE) (e.g. QMIX, MADDPG); this is a natural extension of the work.
+
+---
+
+## Overall Results Summary
+
+| Method | Role | cost_per_order | Beats Baseline? |
+|--------|------|---------------|-----------------|
+| Random | — | 18.78 | — |
+| greedy_nearest | Baseline | **4.57** | — |
+| Plain DQN | A | 15.15 | No |
+| Double DQN | A | 14.04 | No |
+| Dueling DQN | A | 13.19 | No |
+| Dueling DQN (tuned) | A | 9.09 | No |
+| REINFORCE | B | 17.39 | No |
+| A2C | B | 22.95 | No |
+| BC+A2C | B | 8.06 | No |
+| **Dyna-Q** | **C** | **0.78** | **Yes ✓** |
+| Naive Offline DQN | Joint | 17.12 | No |
+| CQL | Joint | 11.80 | No |
+| IDQN (MA) | Joint | +237% vs random | — |
