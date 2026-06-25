@@ -288,112 +288,112 @@ DroneControl-v0 çok daha basit bir ortam: 7 boyutlu obs, 2 boyutlu continuous a
 ---
 ---
 
-# ROL C — Planning / Model-Based Acceleration (Dyna-Q)
+# ROLE C — Planning / Model-Based Acceleration (Dyna-Q)
 
 ## C.1 Methods
 
 ### C.1.1 Tabular Dyna-Q
-Model-tabanli hizlandirma yontemi (Sutton, 1990). Uc bilesen: (1) gercek
-deneyimle Q-learning guncellemesi, (2) ogrenilen bir cevre modeli, (3) her
-gercek adimdan sonra modelden cekilen n adet "hayali" deneyimle ek Q
-guncellemesi (planlama). Planlama, az sayidaki gercek deneyimden cok daha fazla
-ogrenme cikararak ornek-verimliligini artirir â€” rolun ozu budur.
+Model-based acceleration method (Sutton, 1990). Three components: (1) a Q-learning
+update from real experience, (2) a learned environment model, and (3) after each
+real step, n additional "imaginary" updates sampled from the model (planning).
+Planning extracts far more learning from a small amount of real experience,
+improving sample efficiency — this is the core of the role.
 
-Saf numpy ile tablosal olarak yazildi (sinir agi yok). Bu, A ve B rollerinin
-derin ag tabanli yontemlerinden kasitli olarak farkli: daha yorumlanabilir,
-hafif ve tamamen tekrar-uretilebilir.
+Implemented in pure NumPy as a tabular method (no neural network). This is a
+deliberate contrast to the deep-network methods of Roles A and B: more
+interpretable, lightweight, and fully reproducible.
 
-### C.1.2 Durum soyutlamasi (state abstraction)
-169 boyutlu ham aksiyon uzayinda ogrenmek yerine, problemi operasyonel olarak
-ayristirdik. Her karar aninda bir "odak drone" secilir (greedy gibi, atanmayi
-bekleyen siparise en yakin bos drone) ve kontrolcu sadece su iki makro-aksiyon
-arasinda secim yapar:
-- **ASSIGN:** odak drone'a en yakin siparisi ata
-- **CHARGE:** odak drone'u sarja gonder
+### C.1.2 State abstraction
+Instead of learning over the raw 169-dimensional action space, the problem is
+decomposed operationally. At each decision point a "focal drone" is selected
+(like greedy: the idle drone nearest to an unassigned order), and the controller
+chooses only between two macro-actions:
+- **ASSIGN:** assign the nearest order to the focal drone
+- **CHARGE:** send the focal drone to charge
 
-Odak drone'un durumu 5 ozellige indirgenip ayrik kovalara (bucket) bolunur:
-SoC, en yakin hub mesafesi, **bitirme marji** (soc - tahmini is enerjisi),
-siparis aciliyeti, talep baskisi. ~2000 durum Ã— 2 aksiyon â€” tablosal ogrenmeye
-uygun, hizli yakinsayan kompakt bir tablo.
+The focal drone's situation is reduced to 5 features, each discretized into
+buckets: SoC, nearest-hub distance, **finish-margin** (soc − estimated job
+energy), order urgency, and demand pressure. ~2000 states × 2 actions — a compact
+table well-suited to tabular learning that converges quickly.
 
-Tum rotali (no-fly-farkinda) mesafeler, gozlemdeki grid uzerinden kendi
-yazdigimiz BFS ile hesaplanir â€” donmus `Policy` kontratina sadik kalinir
-(env ic organlarina dokunulmaz).
+All routed (no-fly-aware) distances are computed via our own BFS over the grid in
+the observation — staying faithful to the frozen `Policy` contract (no access to
+the environment's internals).
 
-### C.1.3 Depletion-farkinda maske (kilit tasarim)
-greedy enerji-kor: sadece anlik SoC'a bakar, bir drone'u bitiremeyecegi uzun
-bir ise yollayip yolda tuketebilir (-50 ceza). Bizim kontrolcumuz **ileriye
-bakar**: `marj = soc - is_enerjisi` negatifse, o is drone'u tuketir. Bu durumda
-ASSIGN maskeden cikarilir ve CHARGE'a zorlanir. greedy'nin yapisal olarak
-goremedigi bu on-gorulu enerji yonetimi, greedy'yi gecmenin temel sebebidir.
+### C.1.3 Depletion-aware masking (key design)
+Greedy is energy-blind: it looks only at instantaneous SoC and may send a drone on
+a long job it cannot finish, depleting it mid-flight (−50 penalty). Our controller
+**looks ahead**: if `margin = soc − job_energy` is negative, the job will deplete
+the drone. In that case ASSIGN is removed from the mask and CHARGE is forced. This
+forward-looking energy management — which greedy structurally cannot do — is the
+primary reason we beat greedy.
 
 ---
 
 ## C.2 Results
 
-Standart eval config, 3 seed (0,1,2) ortalamasi. `run_all.py` ile uretildi.
+Standard eval config, averaged over 3 seeds (0,1,2). Produced via `run_all.py`.
 
 | Method | cost_per_order | depletion | n_dropped | n_delivered |
 |--------|---------------|-----------|-----------|-------------|
 | random | 18.78 | 8.0 | 21.7 | 39.7 |
 | greedy_nearest (baseline) | 4.57 | 4.0 | 20.0 | 118.3 |
 | milp_rolling | 4.72 | 3.3 | 23.0 | 118.0 |
-| **Dyna-Q (Planning)** | **0.78 Â± 0.04** | **0.0** | **4.7** | **138.7** |
+| **Dyna-Q (Planning)** | **0.78 ± 0.04** | **0.0** | **4.7** | **138.7** |
 
-Dyna-Q, greedy'yi ~6 kat (4.57 â†’ 0.78) ve MILP'i 6 kat geride birakti. Uc seedde
-de **sifir depletion** elde edildi (std=0.04 â€” yontem kararli, tek sanslik kosu
-degil). Kazanim, depletion-farkinda maskenin tum drone'lari hayatta tutmasindan
-kaynaklanir: filo tam kapasite caliÅŸinca hem teslimat artar (138 > 118) hem
-dusen siparis azalir (4.7 < 20).
+Dyna-Q beats greedy by ~6x (4.57 → 0.78) and MILP by 6x. All three seeds achieve
+**zero depletion** (std = 0.04 — the method is stable, not a single lucky run). The
+gain comes from the depletion-aware mask keeping all drones alive: with the fleet
+at full capacity, deliveries rise (138 > 118) and dropped orders fall (4.7 < 20).
 
 ---
 
-## C.3 Ablation â€” Planning Steps (n) Sweep
+## C.3 Ablation — Planning Steps (n) Sweep
 
-Dyna planlama adiminin (n) etkisi. Her n icin 3 seed, 400 episode.
+Effect of the Dyna planning step (n). 3 seeds, 400 episodes per setting.
 
-| n (planning_steps) | cost_per_order | Yorum |
+| n (planning_steps) | cost_per_order | Note |
 |---|---|---|
-| 0 | 0.964 Â± 0.063 | Planlama yok = saf Q-learning (model-free) |
-| 5 | 0.807 Â± 0.072 | Planlama faydasi basliyor |
-| **10** | **0.781 Â± 0.037** | **En iyi (tatli nokta)** |
-| 50 | 0.846 Â± 0.053 | Marjinal fazlalik, hafif geriye |
+| 0 | 0.964 ± 0.063 | No planning = pure Q-learning (model-free) |
+| 5 | 0.807 ± 0.072 | Planning benefit begins |
+| **10** | **0.781 ± 0.037** | **Best (sweet spot)** |
+| 50 | 0.846 ± 0.053 | Marginal excess, slightly worse |
 
-**Bulgu:** Planlama performansi belirgin iyilestiriyor (0.96 â†’ 0.78). Ancak fayda
-n=10 civarinda doyuma ulasiyor; n=50'de hafif geriliyor â€” ders kitabi Dyna
-davranisiyla tutarli (planlama ornek-verimliligini artirir ama doyum noktasi
-vardir). Bu yuzden ana model n=10 ile egitildi. **Onemli ayrim:** greedy'yi
-gecmenin sebebi planlama degil, mimari tasarim (depletion-farkinda maske) â€”
-cunku n=0 bile greedy'yi rahatca geciyor. Planlama bunun uzerine ek iyilestirme
-saglar.
+**Finding:** Planning clearly improves performance (0.96 → 0.78). However, the
+benefit saturates around n=10 and slightly regresses at n=50 — consistent with
+textbook Dyna behavior (planning improves sample efficiency but has a point of
+diminishing returns). The main model was therefore trained with n=10. **Important
+distinction:** the reason we beat greedy is not planning but the architectural
+design (depletion-aware mask) — since even n=0 comfortably beats greedy. Planning
+provides additional improvement on top of that.
 
-(Bkz. `logs/ablation_planning.png` ve `logs/learning_curve_ablation.png`.)
+(See `logs/ablation_planning.png` and `logs/learning_curve_ablation.png`.)
 
 ---
 
 ## C.4 Method Origins
 
-| Method | Paper | Neden Secildi |
-|--------|-------|---------------|
-| Dyna-Q | Sutton (1990), "Integrated Architectures for Learning, Planning and Reacting" | Model-tabanli hizlandirma; teslimat kalemleri (ogrenme egrisi, agirlik, n-sweep ablasyonu) ile birebir ortusur ve eval'de sadece obs gerektirir (donmus act() kontratina uygun) |
-| Q-learning | Watkins (1989) | Dyna'nin direkt-RL bileseni |
+| Method | Paper | Why Chosen |
+|--------|-------|------------|
+| Dyna-Q | Sutton (1990), "Integrated Architectures for Learning, Planning and Reacting" | Model-based acceleration; matches the deliverables (learning curve, weights, n-sweep ablation) exactly, and at eval time needs only the observation (compatible with the frozen act() contract) |
+| Q-learning | Watkins (1989) | The direct-RL component of Dyna |
 
 ---
 
-## C.5 Engineering Log â€” "Ne Bozuldu, Nasil Teshis Ettik"
+## C.5 Engineering Log — "What Broke, How We Diagnosed It"
 
-| Deney / Sorun | Belirti | Teshis | Cozum |
-|-------|-------|--------|-------|
-| Ilk 3-aksiyonlu tasarim (ASSIGN/CHARGE/HOLD) | cost=21.7, drops=72 | Aksiyon sayimi: ajan 344 kez CHARGE/HOLD, 71 kez ASSIGN seciyor | Mimari sadelestirme: HOLD kaldirildi |
-| 2-aksiyonlu, ham odul | deliv=0, cost=2033 | Ajan hep CHARGE seciyor; odul kredi atamasi bozuk (env'de assign/charge zamani ilerletmez) | CHARGE'a anlik odul cezasi + CHARGE_ZONE |
-| Politika sarmalayici | deliv=0 (hala) | Aksiyon izleme: ASSIGN secilse bile `act()` noop donduruyor | `return n_act` -> `return a_act` (2'liye gecerken kalan bug) |
-| Depletion patlamasi | episode sonu 8 drone'dan 1'i sag | Hayatta kalan drone sayaci: 7 drone yolda tukeniyor | Depletion-farkinda maske: marj negatifse ASSIGN yasak |
-| **Nihai** | **cost=0.78, depletion=0** | â€” | **greedy 6 kat geÃ§ildi** |
+| Experiment / Issue | Symptom | Diagnosis | Fix |
+|-------|-------|--------|-----|
+| Initial 3-action design (ASSIGN/CHARGE/HOLD) | cost=21.7, drops=72 | Action count: agent chose CHARGE/HOLD 344x, ASSIGN only 71x | Architectural simplification: removed HOLD |
+| 2-action, raw reward | deliv=0, cost=2033 | Agent always chooses CHARGE; reward credit-assignment broken (assign/charge don't advance time in env) | Instant reward penalty on CHARGE + CHARGE_ZONE |
+| Policy wrapper | deliv=0 (still) | Action tracing: even when ASSIGN is chosen, `act()` returns noop | `return n_act` → `return a_act` (leftover bug from the 2-action switch) |
+| Depletion blowup | 1 of 8 drones alive at episode end | Surviving-drone counter: 7 drones deplete mid-flight | Depletion-aware mask: forbid ASSIGN when margin is negative |
+| **Final** | **cost=0.78, depletion=0** | — | **beat greedy by 6x** |
 
-Bu teshis zinciri (asiri-CHARGE -> mimari sadelestirme -> noop bug -> depletion
-korumasi) yontemin nasil adim adim duzeltildigini gosterir. Her sorun, ajanin
-gercek davranisi olcuLerek (aksiyon dagilimi, hayatta kalan drone sayisi) teshis
-edildi; korlemesine parametre denenmedi.
+This diagnosis chain (over-CHARGE → architectural simplification → noop bug →
+depletion protection) shows how the method was corrected step by step. Each issue
+was diagnosed by measuring the agent's actual behavior (action distribution,
+surviving-drone count); no parameters were tuned blindly.
 
 
 
@@ -478,64 +478,69 @@ CQL beats naive offline DQN as expected, but does not beat the behavioral clonin
 ---
 ---
 
-# TAKIM BİLEŞENİ — Multi-Agent RL (Bölüm 21)
+# JOINT COMPONENT — Multi-Agent RL (Ch. 21)
 
-## MA.1 Yöntem — Parametre Paylaşımlı IDQN
+## MA.1 Method — Parameter-Sharing IDQN
 
-Merkezi dağıtıcı (tek karar verici, 169 aksiyon) yerine **merkezi olmayan
-(decentralized)** bir yapı kuruldu: `DroneDispatchMA-v0` ortamında her drone
-kendi ajanıdır. Her ajan 59 boyutlu **yerel** gözlemine bakıp 4 aksiyondan
-birini seçer: accept (sipariş al), move (hedefe git), charge (şarj), stay (bekle).
+Instead of the centralized dispatcher (a single decision-maker over 169 actions),
+a **decentralized** structure is built: in the `DroneDispatchMA-v0` environment,
+each drone is its own agent. Each agent observes its 59-dimensional **local**
+observation and selects one of 4 actions: accept (take an order), move (go to
+target), charge, or stay (wait).
 
-**IDQN (Independent DQN) + parametre paylaşımı:** Tek bir Q-ağı (MLP 59→128→128→4)
-sekiz ajan tarafından da kullanılır. "Independent" çünkü her ajan kendi başına,
-diğerlerini koordine etmeden karar verir; "parametre paylaşımı" çünkü 8 ayrı ağ
-yerine tek ağ vardır — tüm ajanların deneyimleri ortak bir replay buffer'da
-toplanır ve tek ağı eğitir. Bu, örnek verimliliğini artırır (ağ 8 kat veri görür)
-ve ajanlar arası tutarlılığı korur. Standart DQN bileşenleri kullanıldı: replay
-buffer, hedef ağ (target network), epsilon-greedy keşif.
+**IDQN (Independent DQN) + parameter sharing:** A single Q-network (MLP
+59→128→128→4) is used by all eight agents. It is "independent" because each agent
+decides on its own, without coordinating with the others; it uses "parameter
+sharing" because instead of 8 separate networks there is one network — all agents'
+experiences are pooled into a shared replay buffer and train the single network.
+This improves sample efficiency (the network sees 8x the data) and preserves
+consistency across agents. Standard DQN components are used: replay buffer, target
+network, and epsilon-greedy exploration.
 
-## MA.2 Sonuçlar
+## MA.2 Results
 
-300 episode eğitim, 10 episode değerlendirme. MA ortamı global `cost_per_order`
-döndürmediği için episode başına toplam ödül (8 ajanın toplamı) karşılaştırıldı.
+300 episodes of training, 10 episodes of evaluation. Since the MA environment does
+not return a global `cost_per_order`, total reward per episode (summed over the 8
+agents) is compared.
 
-| Politika | Episode toplam ödülü |
-|----------|---------------------|
-| Rastgele baseline | 442.2 ± 144.1 |
-| **Eğitilmiş IDQN** | **1490.0 ± 160.2** |
+| Policy | Total reward per episode |
+|--------|-------------------------|
+| Random baseline | 442.2 ± 144.1 |
+| **Trained IDQN** | **1490.0 ± 160.2** |
 
-Eğitilmiş IDQN, rastgele baseline'ı **%237** geçti (≈3.4 kat). Bu, merkezi
-olmayan yapının parametre paylaşımıyla başarıyla öğrendiğini gösterir.
+The trained IDQN beats the random baseline by **237%** (≈3.4x). This shows the
+decentralized structure successfully learns with parameter sharing.
 
-## MA.3 Merkezi vs Merkezi Olmayan Karşılaştırma
+## MA.3 Centralized vs Decentralized Comparison
 
-İki yaklaşım farklı ortamlarda çalışır (merkezi: `DroneDispatch-v0`, tek karar
-verici; MA: `DroneDispatchMA-v0`, 8 ajan), bu yüzden doğrudan sayısal head-to-head
-yerine kavramsal karşılaştırma yapılır:
-- **Merkezi (Rol C Dyna-Q):** Tüm filoyu gören tek karar verici → global olarak
-  tutarlı, optimuma yakın kararlar (cost 0.78). Ama merkezi darboğaz; ölçeklenmesi
-  ve gerçek-dünya dağıtık dağıtımı zor.
-- **Merkezi olmayan (IDQN):** Her drone bağımsız → ölçeklenebilir, dağıtık,
-  hata-toleranslı. Ama koordinasyon eksikliği ve non-stationarity nedeniyle
-  global tutarlılığı yakalamak zor.
+The two approaches run in different environments (centralized: `DroneDispatch-v0`,
+single decision-maker; MA: `DroneDispatchMA-v0`, 8 agents), so instead of a direct
+numerical head-to-head we make a conceptual comparison:
+- **Centralized (Role C Dyna-Q):** A single decision-maker that sees the whole
+  fleet → globally consistent, near-optimal decisions (cost 0.78). But it is a
+  central bottleneck; hard to scale and to deploy in a real-world distributed
+  setting.
+- **Decentralized (IDQN):** Each drone acts independently → scalable, distributed,
+  fault-tolerant. But due to lack of coordination and non-stationarity, it is hard
+  to match global consistency.
 
-## MA.4 Non-stationarity Tartışması
+## MA.4 Non-stationarity Discussion
 
-Multi-agent öğrenmenin temel zorluğu **non-stationarity** (durağan-olmama). Her
-ajan, diğer ajanları çevrenin bir parçası gibi görür. Ancak diğer ajanlar da aynı
-anda öğrenip politikalarını değiştirdiği için, her ajanın karşılaştığı çevre
-**sürekli değişir** — durağan değildir. Bu, ajanın **hareketli bir hedefi**
-kovalamasına yol açar: bugün iyi olan bir strateji, diğerleri değiştiğinde yarın
-kötü olabilir. Sonuç: kararsız öğrenme ve zor yakınsama.
+The fundamental challenge of multi-agent learning is **non-stationarity**. Each
+agent treats the other agents as part of its environment. But since the other
+agents are also learning and changing their policies at the same time, the
+environment each agent faces is **constantly changing** — it is not stationary.
+This causes each agent to chase a **moving target**: a strategy that is good today
+may be bad tomorrow once the others change. The result is unstable learning and
+difficult convergence.
 
-Bu olgu sonuçlarımızda doğrudan gözlendi: eğitim ödülleri episode'lar arasında
-güçlü dalgalanma gösterdi (örn. 270 → 948 → 244), istikrarlı bir yakınsama eğrisi
-yerine. Bu oynaklık, ajanların birbirinin etkin çevresini sürekli değiştirmesinin
-doğrudan belirtisidir.
+This phenomenon was directly observed in our results: training rewards showed
+strong fluctuation across episodes (e.g. 270 → 948 → 244) rather than a stable
+convergence curve. This volatility is a direct symptom of agents continuously
+changing each other's effective environment.
 
-**Parametre paylaşımının rolü:** 8 ajanın tek ağı paylaşması, ajanlar arası
-farklılığı azaltıp ortak bir politika öğrenerek non-stationarity'yi **kısmen**
-hafifletir — ancak tamamen ortadan kaldırmaz. Tam yakınsama için merkezi-eğitim/
-dağıtık-yürütme (CTDE) gibi yöntemler (örn. QMIX, MADDPG) gerekir; bu, çalışmanın
-doğal bir uzantısıdır.
+**Role of parameter sharing:** Sharing a single network across the 8 agents
+**partially** mitigates non-stationarity by reducing inter-agent divergence and
+learning a common policy — but does not eliminate it. Full convergence would
+require methods such as centralized-training/decentralized-execution (CTDE) (e.g.
+QMIX, MADDPG); this is a natural extension of the work.
