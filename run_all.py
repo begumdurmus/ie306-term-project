@@ -95,6 +95,9 @@ def main():
     results.append(("Random", r["mean"]))
     r = evaluate(GreedyNearest(cfg), cfg, seeds)
     results.append(("GreedyNearest (baseline)", r["mean"]))
+    from drone_dispatch_env.baselines import MILPRolling
+    r = evaluate(MILPRolling(cfg), cfg, seeds)
+    results.append(("MILP Rolling", r["mean"]))
 
     weight_dir = "weights"
 
